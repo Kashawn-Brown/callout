@@ -175,7 +175,11 @@ The main branch is always green and deployable. Each phase gets its own branch, 
 
 ### 9.2. Commit message format
 
-A commit has a type and an imperative summary with no period, followed by a blank line, followed by two or more body bullets describing what changed, followed optionally by a References line pointing at a decisions.md entry when relevant. Types are feat, fix, chore, refactor, docs, test, style, and wip. Each commit needs at least two body bullets unless it's a trivial one-line change. Every bullet and every line follows the no-manual-line-breaks rule in section 5.10 — let it wrap, don't hard-wrap it yourself. wip is only for intentionally incomplete checkpoints and is never left in main once the task is complete.
+A commit has a type and an imperative summary with no period, followed by a blank line, followed by two or more body bullets describing what changed, followed optionally by a References line pointing at a decisions.md entry when relevant. Types are feat, fix, chore, refactor, docs, test, style, and wip. Each commit needs at least two body bullets unless it's a trivial one-line change. Every bullet and every line follows the no-manual-line-breaks rule in section 5.10 — let it wrap, don't hard-wrap it yourself.
+
+Commits never include a Co-Authored-By trailer or any other co-author attribution, regardless of Claude Code's default behavior. The commit author is you; Fable is a tool being used, not a contributor of record.
+
+wip is only for intentionally incomplete checkpoints and is never left in main once the task is complete.
 
 ### 9.3. Examples
 
