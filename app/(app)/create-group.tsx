@@ -1,46 +1,96 @@
 import { useRouter } from 'expo-router';
-import { useMemo, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 
 import { Avatar } from '@/components/Avatar';
 import { BackButton } from '@/components/BackButton';
+import { ErrorBanner } from '@/components/ErrorBanner';
 import { GradientButton } from '@/components/GradientButton';
 import { FormField } from '@/components/FormField';
-import { getPlaceholderMember, PLACEHOLDER_MEMBERS } from '@/lib/placeholder-data';
+import { createGroup, searchProfiles } from '@/features/groups/api';
+import { initialsOf, memberColor } from '@/lib/format';
+import type { ProfileSearchRow } from '@/types/api';
 import { COLORS, FONTS, RADII, SECTION_LABEL, SPACING } from '@/lib/theme';
 
-// The prototype's four deadline presets. Phase 3 persists the chosen value as the group's fixed per-turn deadline (server-authoritative, CLAUDE.md §2.1).
+// The prototype's four deadline presets, expressed in the minutes the create_group RPC takes; the value persists as the group's fixed per-turn deadline (server-authoritative, CLAUDE.md §2.1).
 const DEADLINE_OPTIONS = [
-  { value: '30m', label: '30 min' },
-  { value: '1h', label: '1 hour' },
-  { value: '6h', label: '6 hours' },
-  { value: '1d', label: '1 day' },
+  { minutes: 30, label: '30 min' },
+  { minutes: 60, label: '1 hour' },
+  { minutes: 360, label: '6 hours' },
+  { minutes: 1440, label: '1 day' },
 ] as const;
 
-type DeadlineValue = (typeof DEADLINE_OPTIONS)[number]['value'];
+// The search RPC requires 2+ characters (D030); shorter input just shows the hint state.
+const MIN_SEARCH_LENGTH = 2;
+const SEARCH_DEBOUNCE_MS = 300;
 
 export default function CreateGroupScreen(): ReactElement {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const [groupName, setGroupName] = useState('');
   const [search, setSearch] = useState('');
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [deadline, setDeadline] = useState<DeadlineValue>('6h');
+  // Results are stored with the query they answer and derived below, so stale answers and the too-short case need no synchronous setState in the effect (react-hooks/set-state-in-effect).
+  const [searchState, setSearchState] = useState<{
+    query: string;
+    rows: ProfileSearchRow[];
+  } | null>(null);
+  const [selected, setSelected] = useState<ProfileSearchRow[]>([]);
+  const [deadlineMinutes, setDeadlineMinutes] = useState<number>(360);
+  const [error, setError] = useState<string | null>(null);
+  const [isCreating, setIsCreating] = useState(false);
 
-  // Placeholder contact list: everyone but the prototype's "current user". Phase 3 replaces this with a real invite flow.
-  const contacts = useMemo(() => PLACEHOLDER_MEMBERS.filter((m) => m.id !== 'u1'), []);
-  const filtered = useMemo(
-    () => contacts.filter((m) => m.name.toLowerCase().includes(search.trim().toLowerCase())),
-    [contacts, search],
-  );
+  useEffect(() => {
+    const query = search.trim();
+    if (query.length < MIN_SEARCH_LENGTH) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      searchProfiles({ search_query: query }).then((result) => {
+        if (result.error) {
+          setError(result.error.message);
+        } else {
+          setError(null);
+          setSearchState({ query, rows: result.data });
+        }
+      });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [search]);
 
-  const toggle = (id: string): void => {
-    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  };
+  const query = search.trim();
+  const results = searchState !== null && searchState.query === query ? searchState.rows : [];
+  const isSearching =
+    query.length >= MIN_SEARCH_LENGTH && (searchState === null || searchState.query !== query);
 
-  const canCreate = groupName.trim().length > 0 && selectedIds.length > 0;
+  const toggle = useCallback((row: ProfileSearchRow): void => {
+    setSelected((prev) =>
+      prev.some((s) => s.user_id === row.user_id)
+        ? prev.filter((s) => s.user_id !== row.user_id)
+        : [...prev, row],
+    );
+  }, []);
+
+  const handleCreate = useCallback(async () => {
+    setIsCreating(true);
+    setError(null);
+    const result = await createGroup({
+      group_name: groupName.trim(),
+      deadline_minutes: deadlineMinutes,
+      invitee_ids: selected.map((s) => s.user_id),
+    });
+    setIsCreating(false);
+    if (result.error) {
+      setError(result.error.message);
+      return;
+    }
+    router.replace(`/group/${result.data.group_id}`);
+  }, [groupName, deadlineMinutes, selected, router]);
+
+  const canCreate = groupName.trim().length > 0 && selected.length > 0 && !isCreating;
 
   return (
     <ScrollView
@@ -53,6 +103,12 @@ export default function CreateGroupScreen(): ReactElement {
         <BackButton />
         <Text style={styles.title}>New Group</Text>
       </View>
+
+      {error !== null && (
+        <View style={styles.section}>
+          <ErrorBanner message={error} />
+        </View>
+      )}
 
       {/* Group name */}
       <View style={styles.section}>
@@ -81,71 +137,89 @@ export default function CreateGroupScreen(): ReactElement {
           <TextInput
             value={search}
             onChangeText={setSearch}
-            placeholder="Search contacts…"
+            placeholder="Search by name or exact email…"
             placeholderTextColor={COLORS.textMuted}
+            autoCapitalize="none"
             style={styles.searchInput}
           />
         </View>
 
-        {selectedIds.length > 0 && (
+        {selected.length > 0 && (
           <View style={styles.chipRow}>
-            {selectedIds.map((id) => {
-              const m = getPlaceholderMember(id);
+            {selected.map((row) => {
+              const color = memberColor(row.user_id);
               return (
                 <Pressable
-                  key={id}
-                  onPress={() => toggle(id)}
+                  key={row.user_id}
+                  onPress={() => toggle(row)}
                   style={[
                     styles.chip,
-                    { backgroundColor: `${m.color}18`, borderColor: `${m.color}44` },
+                    { backgroundColor: `${color}18`, borderColor: `${color}44` },
                   ]}
                 >
-                  <Avatar initials={m.initials} color={m.color} size={20} />
-                  <Text style={[styles.chipName, { color: m.color }]}>{m.name.split(' ')[0]}</Text>
-                  <Text style={[styles.chipRemove, { color: m.color }]}>×</Text>
+                  <Avatar initials={initialsOf(row.display_name)} color={color} size={20} />
+                  <Text style={[styles.chipName, { color }]}>
+                    {row.display_name.split(/\s+/)[0]}
+                  </Text>
+                  <Text style={[styles.chipRemove, { color }]}>×</Text>
                 </Pressable>
               );
             })}
           </View>
         )}
 
-        <View style={styles.contactList}>
-          {filtered.map((m, i) => {
-            const selected = selectedIds.includes(m.id);
-            return (
-              <Pressable
-                key={m.id}
-                onPress={() => toggle(m.id)}
-                style={[
-                  styles.contactRow,
-                  i < filtered.length - 1 && styles.contactRowDivider,
-                  selected && { backgroundColor: `${m.color}10` },
-                ]}
-              >
-                <Avatar initials={m.initials} color={m.color} size={38} ring={selected} />
-                <View style={styles.contactInfo}>
-                  <Text style={styles.contactName}>{m.name}</Text>
-                  <Text style={styles.contactHandle}>
-                    @{m.name.toLowerCase().replace(/\s+/g, '_')}
-                  </Text>
-                </View>
-                {selected && (
-                  <View style={[styles.checkCircle, { backgroundColor: m.color }]}>
-                    <Svg width={12} height={12} viewBox="0 0 12 12" fill="none">
-                      <Path
-                        d="M2 6l3 3 5-5"
-                        stroke={COLORS.white}
-                        strokeWidth={1.8}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    </Svg>
+        {search.trim().length < MIN_SEARCH_LENGTH ? (
+          <Text style={styles.searchHint}>
+            Type at least 2 characters to find people by name, or enter their exact email.
+          </Text>
+        ) : isSearching ? (
+          <Text style={styles.searchHint}>Searching…</Text>
+        ) : results.length === 0 ? (
+          <Text style={styles.searchHint}>
+            No one found — they may need to sign up for Callout first.
+          </Text>
+        ) : (
+          <View style={styles.contactList}>
+            {results.map((row, i) => {
+              const isSelected = selected.some((s) => s.user_id === row.user_id);
+              const color = memberColor(row.user_id);
+              return (
+                <Pressable
+                  key={row.user_id}
+                  onPress={() => toggle(row)}
+                  style={[
+                    styles.contactRow,
+                    i < results.length - 1 && styles.contactRowDivider,
+                    isSelected && { backgroundColor: `${color}10` },
+                  ]}
+                >
+                  <Avatar
+                    initials={initialsOf(row.display_name)}
+                    color={color}
+                    size={38}
+                    ring={isSelected}
+                  />
+                  <View style={styles.contactInfo}>
+                    <Text style={styles.contactName}>{row.display_name}</Text>
                   </View>
-                )}
-              </Pressable>
-            );
-          })}
-        </View>
+                  {isSelected && (
+                    <View style={[styles.checkCircle, { backgroundColor: color }]}>
+                      <Svg width={12} height={12} viewBox="0 0 12 12" fill="none">
+                        <Path
+                          d="M2 6l3 3 5-5"
+                          stroke={COLORS.white}
+                          strokeWidth={1.8}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </Svg>
+                    </View>
+                  )}
+                </Pressable>
+              );
+            })}
+          </View>
+        )}
       </View>
 
       {/* Deadline */}
@@ -153,11 +227,11 @@ export default function CreateGroupScreen(): ReactElement {
         <Text style={styles.sectionLabel}>Response Deadline</Text>
         <View style={styles.deadlineRow}>
           {DEADLINE_OPTIONS.map((option) => {
-            const active = deadline === option.value;
+            const active = deadlineMinutes === option.minutes;
             return (
               <Pressable
-                key={option.value}
-                onPress={() => setDeadline(option.value)}
+                key={option.minutes}
+                onPress={() => setDeadlineMinutes(option.minutes)}
                 style={[styles.deadlineOption, active && styles.deadlineOptionActive]}
               >
                 <Text style={[styles.deadlineText, active && styles.deadlineTextActive]}>
@@ -183,15 +257,17 @@ export default function CreateGroupScreen(): ReactElement {
         </View>
       </View>
 
-      {/* Create — navigates to the placeholder detail screen; the real create_group RPC arrives in Phase 3 */}
+      {/* Create */}
       <View style={styles.section}>
         <GradientButton
           label={
-            selectedIds.length > 0
-              ? `Create Group · ${selectedIds.length + 1} members`
-              : 'Create Group'
+            isCreating
+              ? 'Creating…'
+              : selected.length > 0
+                ? `Create Group · ${selected.length + 1} members`
+                : 'Create Group'
           }
-          onPress={() => router.push('/group/g1')}
+          onPress={handleCreate}
           disabled={!canCreate}
         />
       </View>
@@ -230,11 +306,6 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
     marginBottom: 12,
-  },
-  contactHandle: {
-    color: COLORS.textSecondary,
-    fontFamily: FONTS.body,
-    fontSize: 12,
   },
   contactInfo: {
     flex: 1,
@@ -308,6 +379,12 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     fontFamily: FONTS.body,
     fontSize: 12,
+  },
+  searchHint: {
+    color: COLORS.textMuted,
+    fontFamily: FONTS.body,
+    fontSize: 12,
+    paddingVertical: 8,
   },
   searchIcon: {
     left: 14,
