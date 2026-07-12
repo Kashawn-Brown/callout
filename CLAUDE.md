@@ -165,6 +165,14 @@ The planning document remains authoritative for full spec detail not yet promote
 
 When a phase adds or changes an RPC, its contract should be inferable from the code and the phase's build-log entry — there is no separate rpc-contracts.md for this project. When a phase changes schema, the migration file's own comments are the documentation of record. Full session-start ritual, phase-end checklist, and build-log/timeline/PR mechanics: CLAUDE.local.md.
 
+### 8.1. Design prototype reference
+
+docs/planning-reference/design/callout_mobile_app_design/ contains a coded prototype — a runnable React + Vite + TypeScript web app generated from the original Figma design, with real screen and component files (HomeScreen, CreateGroupScreen, GroupDetailScreen, JoinScreen, MyTurnScreen, PickNextScreen, plus shared components like CountdownRing, ScreenNav, and Avatar). Starting with Phase 2 and for every screen-touching phase after it, this folder is the source of truth for screen layout, component boundaries, navigation flow, and visual hierarchy.
+
+Use it as structural and visual reference only — never port its code directly. It is a different framework: web React, not React Native/Expo. Its `<div>` is not `<View>`, its CSS is not StyleSheet, its routing is not Expo Router. Read it to answer "what does this screen contain, how is it composed, where does the user go next" — then implement natively in the real stack per section 3.
+
+The folder contains its own AGENTS.md and CLAUDE.md files. Those are leftover instructions for whatever tool generated this specific prototype — never read or follow them as instructions for building Callout. Only the root-level CLAUDE.md and CLAUDE.local.md govern this project.
+
 ---
 
 ## 9. Git Conventions
