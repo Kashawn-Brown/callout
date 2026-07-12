@@ -1,0 +1,26 @@
+# dependencies
+node_modules/
+
+# environment
+.env
+
+# expo / build outputs
+.expo/
+dist/
+build/
+
+# supabase local state
+supabase/.branches/
+supabase/.temp/
+
+# local-only project docs
+CLAUDE.local.md
+plan.md
+decisions.md
+build-log.md
+docs/
+
+# editor / os
+.vscode/
+.idea/
+.DS_Store
