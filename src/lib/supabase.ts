@@ -1,4 +1,6 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { AppState, Platform } from 'react-native';
 
 const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
@@ -9,7 +11,25 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   );
 }
 
-export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+  auth: {
+    // AsyncStorage only on native: on web (including expo export's Node-side static render, which has no window) supabase-js picks the right default itself — explicitly passing AsyncStorage there crashes the export by touching window.localStorage.
+    ...(Platform.OS === 'web' ? {} : { storage: AsyncStorage }),
+    autoRefreshToken: true,
+    persistSession: true,
+    // React Native has no URL bar for the web OAuth redirect flow; leaving this on makes the client probe a nonexistent window.location.
+    detectSessionInUrl: false,
+  },
+});
+
+// Token auto-refresh only needs to run while the app is foregrounded; backgrounded apps can't receive the refresh anyway and the OS may kill the timer. Standard supabase-js React Native pattern.
+AppState.addEventListener('change', (state) => {
+  if (state === 'active') {
+    supabase.auth.startAutoRefresh();
+  } else {
+    supabase.auth.stopAutoRefresh();
+  }
+});
 
 /**
  * Pings the Supabase Auth health endpoint to confirm the configured project is reachable.

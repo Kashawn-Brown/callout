@@ -1,0 +1,15 @@
+# Markdown is hand-managed prose under the no-manual-line-breaks rule (CLAUDE.md §5.10); Prettier's markdown formatter rewrites emphasis markers and escapes glob characters like @/features/*, corrupting meaning.
+*.md
+
+# Agent instructions and skills are not project source.
+.claude/
+
+# Expo-generated asset descriptors keep the format Expo wrote them in.
+assets/expo.icon/
+
+# The design prototype is a read-only reference (CLAUDE.md §8.1) — never reformat it.
+docs/planning-reference/design/
+
+supabase/.branches/
+supabase/.temp/
+.expo/
