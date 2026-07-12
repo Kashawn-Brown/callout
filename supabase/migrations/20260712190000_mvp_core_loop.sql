@@ -110,8 +110,9 @@ as $$
 declare
   v_turn_id uuid;
 begin
-  insert into public.turn (round_id, group_id, called_out_user_id, called_by_user_id, deadline_at)
-  values (target_round_id, target_group_id, target_user_id, caller_user_id, now() + turn_deadline)
+  -- created_at is stamped with clock_timestamp() (statement-real time), not the column's now() default (transaction time): "latest turn in round" ordering relies on created_at, and rows created inside one transaction would otherwise tie and fall back to comparing random uuids.
+  insert into public.turn (round_id, group_id, called_out_user_id, called_by_user_id, deadline_at, created_at)
+  values (target_round_id, target_group_id, target_user_id, caller_user_id, now() + turn_deadline, clock_timestamp())
   returning id into v_turn_id;
 
   insert into public.notification (group_id, turn_id, recipient_user_id, sent_by, type)
