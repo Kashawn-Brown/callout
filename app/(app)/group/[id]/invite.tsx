@@ -1,85 +1,90 @@
 import { useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useState, type ReactElement } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import * as Linking from 'expo-linking';
+import { useCallback, useState, type ReactElement } from 'react';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 
 import { Avatar } from '@/components/Avatar';
 import { BackButton } from '@/components/BackButton';
 import { ErrorBanner } from '@/components/ErrorBanner';
-import { invitePlayer, searchProfiles } from '@/features/groups/api';
+import { useConnections } from '@/features/connections/useConnections';
+import type { ConnectionView } from '@/features/connections/queries';
+import { createShareInvite, invitePlayer } from '@/features/groups/api';
 import { useGroupDetail } from '@/features/groups/useGroupDetail';
-import { initialsOf, memberColor } from '@/lib/format';
-import type { ProfileSearchRow } from '@/types/api';
 import { COLORS, FONTS, RADII, SECTION_LABEL, SPACING } from '@/lib/theme';
 
-const MIN_SEARCH_LENGTH = 2;
-const SEARCH_DEBOUNCE_MS = 300;
-
-/** Host-only mid-game add (invite_player RPC): the invitee still accepts through the normal join flow, exactly like a creation-time invite. */
+/** Host-only mid-game add. Direct invites draw from the host's connections (D035); anyone outside them gets a single-use share link instead (D036). */
 export default function InvitePlayerScreen(): ReactElement {
   const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
   const { detail, refetch } = useGroupDetail(id ?? null);
+  const { connections, error: connectionsError } = useConnections();
 
-  const [search, setSearch] = useState('');
-  // Results are stored with the query they answer and derived below, so stale answers and the too-short case need no synchronous setState in the effect (react-hooks/set-state-in-effect).
-  const [searchState, setSearchState] = useState<{
-    query: string;
-    rows: ProfileSearchRow[];
-  } | null>(null);
+  const [filter, setFilter] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [invitedIds, setInvitedIds] = useState<string[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
-
-  useEffect(() => {
-    const query = search.trim();
-    if (query.length < MIN_SEARCH_LENGTH) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      searchProfiles({ search_query: query }).then((result) => {
-        if (result.error) {
-          setError(result.error.message);
-        } else {
-          setError(null);
-          setSearchState({ query, rows: result.data });
-        }
-      });
-    }, SEARCH_DEBOUNCE_MS);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [search]);
-
-  const query = search.trim();
-  const results = searchState !== null && searchState.query === query ? searchState.rows : [];
-  const isSearching =
-    query.length >= MIN_SEARCH_LENGTH && (searchState === null || searchState.query !== query);
+  const [isSharing, setIsSharing] = useState(false);
 
   const handleInvite = useCallback(
-    async (row: ProfileSearchRow) => {
+    async (connection: ConnectionView) => {
       if (!id) {
         return;
       }
-      setBusyId(row.user_id);
+      setBusyId(connection.userId);
       setError(null);
-      const result = await invitePlayer({ target_group_id: id, target_user_id: row.user_id });
+      const result = await invitePlayer({ target_group_id: id, target_user_id: connection.userId });
       setBusyId(null);
       if (result.error) {
         setError(result.error.message);
         return;
       }
-      setInvitedIds((prev) => [...prev, row.user_id]);
+      setInvitedIds((prev) => [...prev, connection.userId]);
       refetch();
     },
     [id, refetch],
   );
 
+  // One tap = one fresh single-use token (D036), handed to the OS share sheet with both the deep link and the raw code (the code survives channels that mangle URLs).
+  const handleShareLink = useCallback(async () => {
+    if (!id || !detail) {
+      return;
+    }
+    setIsSharing(true);
+    setError(null);
+    const result = await createShareInvite({ target_group_id: id });
+    setIsSharing(false);
+    if (result.error) {
+      setError(result.error.message);
+      return;
+    }
+    const url = Linking.createURL('claim-invite', { queryParams: { token: result.data.token } });
+    await Share.share({
+      message: `Join my Callout group “${detail.group.name}”! Open this link after installing the app: ${url} — or sign up and enter invite code ${result.data.token}. This invite works exactly once.`,
+    });
+  }, [id, detail]);
+
   const memberIds = new Set([
     ...(detail?.members.map((m) => m.userId) ?? []),
     ...(detail?.invitedMembers.map((m) => m.userId) ?? []),
   ]);
+
+  const filterQuery = filter.trim().toLowerCase();
+  const candidates = (connections ?? []).filter(
+    (c) =>
+      !memberIds.has(c.userId) &&
+      (filterQuery.length === 0 || c.displayName.toLowerCase().includes(filterQuery)),
+  );
 
   return (
     <ScrollView
@@ -95,79 +100,112 @@ export default function InvitePlayerScreen(): ReactElement {
         </View>
       </View>
 
-      {error !== null && (
+      {(error !== null || connectionsError !== null) && (
         <View style={styles.section}>
-          <ErrorBanner message={error} />
+          <ErrorBanner message={error ?? connectionsError ?? ''} />
         </View>
       )}
 
+      {/* From connections (D035) */}
       <View style={styles.section}>
-        <Text style={styles.sectionLabel}>Find People</Text>
-        <View style={styles.searchWrap}>
-          <Svg width={16} height={16} viewBox="0 0 16 16" fill="none" style={styles.searchIcon}>
-            <Circle cx={7} cy={7} r={5} stroke={COLORS.textSecondary} strokeWidth={1.5} />
-            <Path
-              d="M11 11l3 3"
-              stroke={COLORS.textSecondary}
-              strokeWidth={1.5}
-              strokeLinecap="round"
-            />
-          </Svg>
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Search by name or exact email…"
-            placeholderTextColor={COLORS.textMuted}
-            autoCapitalize="none"
-            style={styles.searchInput}
-          />
-        </View>
+        <Text style={styles.sectionLabel}>From Your Connections</Text>
 
-        {search.trim().length < MIN_SEARCH_LENGTH ? (
-          <Text style={styles.searchHint}>
-            Type at least 2 characters to find people by name, or enter their exact email.
-          </Text>
-        ) : isSearching ? (
-          <Text style={styles.searchHint}>Searching…</Text>
-        ) : results.length === 0 ? (
-          <Text style={styles.searchHint}>
-            No one found — they may need to sign up for Callout first.
-          </Text>
-        ) : (
-          <View style={styles.resultList}>
-            {results.map((row, i) => {
-              const color = memberColor(row.user_id);
-              const alreadyIn = memberIds.has(row.user_id);
-              const justInvited = invitedIds.includes(row.user_id);
-              return (
-                <View
-                  key={row.user_id}
-                  style={[styles.resultRow, i < results.length - 1 && styles.resultRowDivider]}
-                >
-                  <Avatar initials={initialsOf(row.display_name)} color={color} size={38} />
-                  <View style={styles.resultInfo}>
-                    <Text style={styles.resultName}>{row.display_name}</Text>
-                  </View>
-                  {alreadyIn || justInvited ? (
-                    <Text style={styles.invitedLabel}>
-                      {justInvited ? 'Invited ✓' : 'In group'}
-                    </Text>
-                  ) : (
-                    <Pressable
-                      onPress={() => handleInvite(row)}
-                      disabled={busyId !== null}
-                      style={({ pressed }) => [styles.inviteButton, pressed && styles.pressed]}
-                    >
-                      <Text style={styles.inviteButtonLabel}>
-                        {busyId === row.user_id ? 'Inviting…' : 'Invite'}
-                      </Text>
-                    </Pressable>
-                  )}
-                </View>
-              );
-            })}
+        {connections === null ? (
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator color={COLORS.ember} />
           </View>
+        ) : (
+          <>
+            {connections.length > 0 && (
+              <View style={styles.searchWrap}>
+                <Svg
+                  width={16}
+                  height={16}
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  style={styles.searchIcon}
+                >
+                  <Circle cx={7} cy={7} r={5} stroke={COLORS.textSecondary} strokeWidth={1.5} />
+                  <Path
+                    d="M11 11l3 3"
+                    stroke={COLORS.textSecondary}
+                    strokeWidth={1.5}
+                    strokeLinecap="round"
+                  />
+                </Svg>
+                <TextInput
+                  value={filter}
+                  onChangeText={setFilter}
+                  placeholder="Search your connections…"
+                  placeholderTextColor={COLORS.textMuted}
+                  autoCapitalize="none"
+                  style={styles.searchInput}
+                />
+              </View>
+            )}
+
+            {candidates.length === 0 ? (
+              <Text style={styles.searchHint}>
+                {connections.length === 0
+                  ? 'No connections yet — add friends from your profile, or share an invite link below.'
+                  : filterQuery.length > 0
+                    ? `No connections match “${filter.trim()}”.`
+                    : 'Everyone you’re connected with is already in this group — share an invite link below to bring someone new.'}
+              </Text>
+            ) : (
+              <View style={styles.resultList}>
+                {candidates.map((c, i) => {
+                  const justInvited = invitedIds.includes(c.userId);
+                  return (
+                    <View
+                      key={c.userId}
+                      style={[styles.resultRow, i < candidates.length - 1 && styles.resultRowDivider]}
+                    >
+                      <Avatar initials={c.initials} color={c.color} size={38} />
+                      <View style={styles.resultInfo}>
+                        <Text style={styles.resultName}>{c.displayName}</Text>
+                      </View>
+                      {justInvited ? (
+                        <Text style={styles.invitedLabel}>Invited ✓</Text>
+                      ) : (
+                        <Pressable
+                          onPress={() => handleInvite(c)}
+                          disabled={busyId !== null}
+                          style={({ pressed }) => [styles.inviteButton, pressed && styles.pressed]}
+                        >
+                          <Text style={styles.inviteButtonLabel}>
+                            {busyId === c.userId ? 'Inviting…' : 'Invite'}
+                          </Text>
+                        </Pressable>
+                      )}
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+          </>
         )}
+      </View>
+
+      {/* Someone new (D036) */}
+      <View style={styles.section}>
+        <Text style={styles.sectionLabel}>Someone New</Text>
+        <View style={styles.shareCard}>
+          <Text style={styles.shareTitle}>Share a one-time invite link</Text>
+          <Text style={styles.shareBody}>
+            For a friend who isn’t on Callout yet. Signing up through it puts them straight into
+            this group and connects the two of you. Each link works exactly once.
+          </Text>
+          <Pressable
+            onPress={handleShareLink}
+            disabled={isSharing}
+            style={({ pressed }) => [styles.shareButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.shareButtonLabel}>
+              {isSharing ? 'Creating link…' : 'Create & Share Link'}
+            </Text>
+          </Pressable>
+        </View>
       </View>
     </ScrollView>
   );
@@ -203,6 +241,9 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bodySemiBold,
     fontSize: 12,
   },
+  loadingWrap: {
+    paddingVertical: 24,
+  },
   pressed: {
     opacity: 0.8,
   },
@@ -236,6 +277,7 @@ const styles = StyleSheet.create({
     color: COLORS.textMuted,
     fontFamily: FONTS.body,
     fontSize: 12,
+    lineHeight: 18,
     paddingVertical: 8,
   },
   searchIcon: {
@@ -266,6 +308,39 @@ const styles = StyleSheet.create({
   sectionLabel: {
     ...SECTION_LABEL,
     marginBottom: 8,
+  },
+  shareBody: {
+    color: COLORS.textSecondary,
+    fontFamily: FONTS.body,
+    fontSize: 12,
+    lineHeight: 18,
+    marginTop: 6,
+  },
+  shareButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(123,97,255,0.15)',
+    borderColor: 'rgba(123,97,255,0.4)',
+    borderRadius: RADII.button,
+    borderWidth: 1,
+    marginTop: 14,
+    paddingVertical: 12,
+  },
+  shareButtonLabel: {
+    color: COLORS.invite,
+    fontFamily: FONTS.display,
+    fontSize: 13,
+  },
+  shareCard: {
+    backgroundColor: COLORS.card,
+    borderColor: COLORS.border,
+    borderRadius: RADII.card,
+    borderWidth: 1,
+    padding: 16,
+  },
+  shareTitle: {
+    color: COLORS.textPrimary,
+    fontFamily: FONTS.bodyBold,
+    fontSize: 14,
   },
   subtitle: {
     color: COLORS.textSecondary,

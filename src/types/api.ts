@@ -8,14 +8,57 @@ export type RpcError = {
 
 export type RpcResult<T> = { data: T; error: null } | { data: null; error: RpcError };
 
-export type SearchProfilesParams = {
-  search_query: string;
+export type AddConnectionByShortIdParams = {
+  short_id_code: string;
 };
 
-export type ProfileSearchRow = {
+export type AddConnectionByShortIdResult = {
   user_id: string;
   display_name: string;
   avatar_url: string | null;
+  already_connected: boolean;
+};
+
+export type AddConnectionByEmailParams = {
+  email_address: string;
+};
+
+/** Deliberately content-free (D033): the response is identical whether or not the email matched an account, so account existence can never be probed through this call. */
+export type AddConnectionByEmailResult = {
+  status: 'processed';
+};
+
+export type RemoveConnectionParams = {
+  target_user_id: string;
+};
+
+export type RemoveConnectionResult = {
+  status: 'removed';
+};
+
+export type CreateShareInviteParams = {
+  target_group_id: string;
+};
+
+export type CreateShareInviteResult = {
+  share_invite_id: string;
+  token: string;
+};
+
+export type PreviewShareInviteParams = {
+  invite_token: string;
+};
+
+export type PreviewShareInviteResult = {
+  group_id: string;
+  group_name: string;
+  inviter_name: string | null;
+  member_count: number;
+  status: 'valid' | 'used';
+};
+
+export type ClaimShareInviteParams = {
+  invite_token: string;
 };
 
 export type CreateGroupParams = {
@@ -54,6 +97,11 @@ export type RespondToInviteResult = RoundOpenedFields & {
   status: 'joined' | 'declined';
 };
 
+export type ClaimShareInviteResult = RoundOpenedFields & {
+  status: 'joined';
+  group_id: string;
+};
+
 export type StartGameParams = {
   target_group_id: string;
 };
@@ -69,6 +117,8 @@ export type SubmitTurnResult = RoundOpenedFields & {
   submission_id: string;
   /** True when eligible players remain and the submitter must now pick who is next (manual targeting). False means the round completed (D029). */
   handoff_required: boolean;
+  /** When handoff_required, the turn's deadline_at was overwritten with this fixed five-minute pick-only window (D042). */
+  pick_deadline_at?: string;
   round_completed?: boolean;
 };
 
@@ -104,3 +154,6 @@ export type RemovePlayerResult = RoundOpenedFields & {
 
 /** Server-enforced submission length (planning doc §5); mirrored client-side for the composer counter only. */
 export const MAX_SUBMISSION_LENGTH = 2000;
+
+/** The fixed post-submission pick window (D042), mirrored client-side only to render the countdown ring's full arc — the authoritative deadline is always the turn's deadline_at. */
+export const PICK_WINDOW_MINUTES = 5;

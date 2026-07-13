@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { useSession } from '@/features/auth/SessionProvider';
 import { supabase } from '@/lib/supabase';
@@ -7,6 +7,7 @@ import type { Profile } from '@/types/models';
 type UseProfileResult = {
   profile: Profile | null;
   isLoading: boolean;
+  refetch: () => void;
 };
 
 type LoadedProfile = {
@@ -14,13 +15,14 @@ type LoadedProfile = {
   profile: Profile | null;
 };
 
-/** Reads the signed-in user's own profile row (auto-created on signup per D023). Read-only — profile edits arrive in a later phase and will go through an RPC. */
+/** Reads the signed-in user's own profile row (auto-created on signup per D023). */
 export function useProfile(): UseProfileResult {
   const { session } = useSession();
   const userId = session?.user.id ?? null;
 
   // State tracks which user the loaded profile belongs to, so signed-out and user-switched cases are handled by derivation below instead of synchronous setState in the effect (react-hooks/set-state-in-effect).
   const [loaded, setLoaded] = useState<LoadedProfile | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!userId) {
@@ -31,7 +33,7 @@ export function useProfile(): UseProfileResult {
 
     supabase
       .from('profile')
-      .select('id, display_name, avatar_url')
+      .select('id, display_name, avatar_url, short_id')
       .eq('id', userId)
       .single()
       .then(({ data, error }) => {
@@ -51,12 +53,35 @@ export function useProfile(): UseProfileResult {
     return () => {
       cancelled = true;
     };
-  }, [userId]);
+  }, [userId, reloadKey]);
+
+  const refetch = useCallback(() => {
+    setReloadKey((key) => key + 1);
+  }, []);
 
   const isCurrent = userId !== null && loaded !== null && loaded.userId === userId;
 
   return {
     profile: isCurrent ? loaded.profile : null,
     isLoading: userId !== null && !isCurrent,
+    refetch,
   };
+}
+
+/**
+ * Updates the signed-in user's display name through the one sanctioned client-write surface (the Phase 1 profile self-update policy; CLAUDE.md §2.2's exception). The grant is column-scoped server-side, so identity fields like short_id are untouchable regardless of what this sends.
+ */
+export async function updateDisplayName(
+  userId: string,
+  displayName: string,
+): Promise<{ error: { code: string; message: string } | null }> {
+  const { error } = await supabase
+    .from('profile')
+    .update({ display_name: displayName.trim() })
+    .eq('id', userId);
+
+  if (error) {
+    return { error: { code: error.code, message: error.message } };
+  }
+  return { error: null };
 }

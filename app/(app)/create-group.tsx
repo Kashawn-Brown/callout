@@ -1,6 +1,14 @@
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useState, type ReactElement } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useState, type ReactElement } from 'react';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 
@@ -9,9 +17,9 @@ import { BackButton } from '@/components/BackButton';
 import { ErrorBanner } from '@/components/ErrorBanner';
 import { GradientButton } from '@/components/GradientButton';
 import { FormField } from '@/components/FormField';
-import { createGroup, searchProfiles } from '@/features/groups/api';
-import { initialsOf, memberColor } from '@/lib/format';
-import type { ProfileSearchRow } from '@/types/api';
+import { useConnections } from '@/features/connections/useConnections';
+import type { ConnectionView } from '@/features/connections/queries';
+import { createGroup } from '@/features/groups/api';
 import { COLORS, FONTS, RADII, SECTION_LABEL, SPACING } from '@/lib/theme';
 
 // The prototype's four deadline presets, expressed in the minutes the create_group RPC takes; the value persists as the group's fixed per-turn deadline (server-authoritative, CLAUDE.md §2.1).
@@ -22,55 +30,30 @@ const DEADLINE_OPTIONS = [
   { minutes: 1440, label: '1 day' },
 ] as const;
 
-// The search RPC requires 2+ characters (D030); shorter input just shows the hint state.
-const MIN_SEARCH_LENGTH = 2;
-const SEARCH_DEBOUNCE_MS = 300;
-
 export default function CreateGroupScreen(): ReactElement {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { connections, error: connectionsError } = useConnections();
+
   const [groupName, setGroupName] = useState('');
-  const [search, setSearch] = useState('');
-  // Results are stored with the query they answer and derived below, so stale answers and the too-short case need no synchronous setState in the effect (react-hooks/set-state-in-effect).
-  const [searchState, setSearchState] = useState<{
-    query: string;
-    rows: ProfileSearchRow[];
-  } | null>(null);
-  const [selected, setSelected] = useState<ProfileSearchRow[]>([]);
+  const [filter, setFilter] = useState('');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [deadlineMinutes, setDeadlineMinutes] = useState<number>(360);
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
 
-  useEffect(() => {
-    const query = search.trim();
-    if (query.length < MIN_SEARCH_LENGTH) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      searchProfiles({ search_query: query }).then((result) => {
-        if (result.error) {
-          setError(result.error.message);
-        } else {
-          setError(null);
-          setSearchState({ query, rows: result.data });
-        }
-      });
-    }, SEARCH_DEBOUNCE_MS);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [search]);
+  // The picker draws only from existing connections (D035); the filter searches within them and nothing else (D034). The server enforces the same rule in create_group.
+  const filterQuery = filter.trim().toLowerCase();
+  const visibleConnections = (connections ?? []).filter(
+    (c) => filterQuery.length === 0 || c.displayName.toLowerCase().includes(filterQuery),
+  );
+  const selected = (connections ?? []).filter((c) => selectedIds.includes(c.userId));
 
-  const query = search.trim();
-  const results = searchState !== null && searchState.query === query ? searchState.rows : [];
-  const isSearching =
-    query.length >= MIN_SEARCH_LENGTH && (searchState === null || searchState.query !== query);
-
-  const toggle = useCallback((row: ProfileSearchRow): void => {
-    setSelected((prev) =>
-      prev.some((s) => s.user_id === row.user_id)
-        ? prev.filter((s) => s.user_id !== row.user_id)
-        : [...prev, row],
+  const toggle = useCallback((connection: ConnectionView): void => {
+    setSelectedIds((prev) =>
+      prev.includes(connection.userId)
+        ? prev.filter((id) => id !== connection.userId)
+        : [...prev, connection.userId],
     );
   }, []);
 
@@ -80,7 +63,7 @@ export default function CreateGroupScreen(): ReactElement {
     const result = await createGroup({
       group_name: groupName.trim(),
       deadline_minutes: deadlineMinutes,
-      invitee_ids: selected.map((s) => s.user_id),
+      invitee_ids: selectedIds,
     });
     setIsCreating(false);
     if (result.error) {
@@ -88,9 +71,9 @@ export default function CreateGroupScreen(): ReactElement {
       return;
     }
     router.replace(`/group/${result.data.group_id}`);
-  }, [groupName, deadlineMinutes, selected, router]);
+  }, [groupName, deadlineMinutes, selectedIds, router]);
 
-  const canCreate = groupName.trim().length > 0 && selected.length > 0 && !isCreating;
+  const canCreate = groupName.trim().length > 0 && selectedIds.length > 0 && !isCreating;
 
   return (
     <ScrollView
@@ -104,9 +87,9 @@ export default function CreateGroupScreen(): ReactElement {
         <Text style={styles.title}>New Group</Text>
       </View>
 
-      {error !== null && (
+      {(error !== null || connectionsError !== null) && (
         <View style={styles.section}>
-          <ErrorBanner message={error} />
+          <ErrorBanner message={error ?? connectionsError ?? ''} />
         </View>
       )}
 
@@ -120,105 +103,99 @@ export default function CreateGroupScreen(): ReactElement {
         />
       </View>
 
-      {/* Invite people */}
+      {/* Invite people — connections only (D035) */}
       <View style={styles.section}>
         <Text style={styles.sectionLabel}>Invite People</Text>
 
-        <View style={styles.searchWrap}>
-          <Svg width={16} height={16} viewBox="0 0 16 16" fill="none" style={styles.searchIcon}>
-            <Circle cx={7} cy={7} r={5} stroke={COLORS.textSecondary} strokeWidth={1.5} />
-            <Path
-              d="M11 11l3 3"
-              stroke={COLORS.textSecondary}
-              strokeWidth={1.5}
-              strokeLinecap="round"
-            />
-          </Svg>
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Search by name or exact email…"
-            placeholderTextColor={COLORS.textMuted}
-            autoCapitalize="none"
-            style={styles.searchInput}
-          />
-        </View>
-
         {selected.length > 0 && (
           <View style={styles.chipRow}>
-            {selected.map((row) => {
-              const color = memberColor(row.user_id);
-              return (
-                <Pressable
-                  key={row.user_id}
-                  onPress={() => toggle(row)}
-                  style={[
-                    styles.chip,
-                    { backgroundColor: `${color}18`, borderColor: `${color}44` },
-                  ]}
-                >
-                  <Avatar initials={initialsOf(row.display_name)} color={color} size={20} />
-                  <Text style={[styles.chipName, { color }]}>
-                    {row.display_name.split(/\s+/)[0]}
-                  </Text>
-                  <Text style={[styles.chipRemove, { color }]}>×</Text>
-                </Pressable>
-              );
-            })}
+            {selected.map((c) => (
+              <Pressable
+                key={c.userId}
+                onPress={() => toggle(c)}
+                style={[styles.chip, { backgroundColor: `${c.color}18`, borderColor: `${c.color}44` }]}
+              >
+                <Avatar initials={c.initials} color={c.color} size={20} />
+                <Text style={[styles.chipName, { color: c.color }]}>
+                  {c.displayName.split(/\s+/)[0]}
+                </Text>
+                <Text style={[styles.chipRemove, { color: c.color }]}>×</Text>
+              </Pressable>
+            ))}
           </View>
         )}
 
-        {search.trim().length < MIN_SEARCH_LENGTH ? (
-          <Text style={styles.searchHint}>
-            Type at least 2 characters to find people by name, or enter their exact email.
-          </Text>
-        ) : isSearching ? (
-          <Text style={styles.searchHint}>Searching…</Text>
-        ) : results.length === 0 ? (
-          <Text style={styles.searchHint}>
-            No one found — they may need to sign up for Callout first.
+        {connections === null ? (
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator color={COLORS.ember} />
+          </View>
+        ) : connections.length === 0 ? (
+          <Text style={styles.emptyHint}>
+            Groups are built from your connections, and you don’t have any yet. Add friends by
+            their Callout ID or email from your profile first — or invite someone new with a share
+            link after the group exists.
           </Text>
         ) : (
-          <View style={styles.contactList}>
-            {results.map((row, i) => {
-              const isSelected = selected.some((s) => s.user_id === row.user_id);
-              const color = memberColor(row.user_id);
-              return (
-                <Pressable
-                  key={row.user_id}
-                  onPress={() => toggle(row)}
-                  style={[
-                    styles.contactRow,
-                    i < results.length - 1 && styles.contactRowDivider,
-                    isSelected && { backgroundColor: `${color}10` },
-                  ]}
-                >
-                  <Avatar
-                    initials={initialsOf(row.display_name)}
-                    color={color}
-                    size={38}
-                    ring={isSelected}
-                  />
-                  <View style={styles.contactInfo}>
-                    <Text style={styles.contactName}>{row.display_name}</Text>
-                  </View>
-                  {isSelected && (
-                    <View style={[styles.checkCircle, { backgroundColor: color }]}>
-                      <Svg width={12} height={12} viewBox="0 0 12 12" fill="none">
-                        <Path
-                          d="M2 6l3 3 5-5"
-                          stroke={COLORS.white}
-                          strokeWidth={1.8}
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </Svg>
-                    </View>
-                  )}
-                </Pressable>
-              );
-            })}
-          </View>
+          <>
+            <View style={styles.searchWrap}>
+              <Svg width={16} height={16} viewBox="0 0 16 16" fill="none" style={styles.searchIcon}>
+                <Circle cx={7} cy={7} r={5} stroke={COLORS.textSecondary} strokeWidth={1.5} />
+                <Path
+                  d="M11 11l3 3"
+                  stroke={COLORS.textSecondary}
+                  strokeWidth={1.5}
+                  strokeLinecap="round"
+                />
+              </Svg>
+              <TextInput
+                value={filter}
+                onChangeText={setFilter}
+                placeholder="Search your connections…"
+                placeholderTextColor={COLORS.textMuted}
+                autoCapitalize="none"
+                style={styles.searchInput}
+              />
+            </View>
+
+            {visibleConnections.length === 0 ? (
+              <Text style={styles.emptyHint}>No connections match “{filter.trim()}”.</Text>
+            ) : (
+              <View style={styles.contactList}>
+                {visibleConnections.map((c, i) => {
+                  const isSelected = selectedIds.includes(c.userId);
+                  return (
+                    <Pressable
+                      key={c.userId}
+                      onPress={() => toggle(c)}
+                      style={[
+                        styles.contactRow,
+                        i < visibleConnections.length - 1 && styles.contactRowDivider,
+                        isSelected && { backgroundColor: `${c.color}10` },
+                      ]}
+                    >
+                      <Avatar initials={c.initials} color={c.color} size={38} ring={isSelected} />
+                      <View style={styles.contactInfo}>
+                        <Text style={styles.contactName}>{c.displayName}</Text>
+                      </View>
+                      {isSelected && (
+                        <View style={[styles.checkCircle, { backgroundColor: c.color }]}>
+                          <Svg width={12} height={12} viewBox="0 0 12 12" fill="none">
+                            <Path
+                              d="M2 6l3 3 5-5"
+                              stroke={COLORS.white}
+                              strokeWidth={1.8}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </Svg>
+                        </View>
+                      )}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            )}
+          </>
         )}
       </View>
 
@@ -263,8 +240,8 @@ export default function CreateGroupScreen(): ReactElement {
           label={
             isCreating
               ? 'Creating…'
-              : selected.length > 0
-                ? `Create Group · ${selected.length + 1} members`
+              : selectedIds.length > 0
+                ? `Create Group · ${selectedIds.length + 1} members`
                 : 'Create Group'
           }
           onPress={handleCreate}
@@ -358,6 +335,13 @@ const styles = StyleSheet.create({
   deadlineTextActive: {
     color: COLORS.ember,
   },
+  emptyHint: {
+    color: COLORS.textMuted,
+    fontFamily: FONTS.body,
+    fontSize: 12,
+    lineHeight: 18,
+    paddingVertical: 8,
+  },
   flex: {
     backgroundColor: COLORS.background,
     flex: 1,
@@ -380,11 +364,8 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.body,
     fontSize: 12,
   },
-  searchHint: {
-    color: COLORS.textMuted,
-    fontFamily: FONTS.body,
-    fontSize: 12,
-    paddingVertical: 8,
+  loadingWrap: {
+    paddingVertical: 24,
   },
   searchIcon: {
     left: 14,

@@ -1,15 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, type ReactElement } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 
@@ -17,13 +9,13 @@ import { Avatar } from '@/components/Avatar';
 import { BottomNav } from '@/components/BottomNav';
 import { ErrorBanner } from '@/components/ErrorBanner';
 import { IconButton } from '@/components/IconButton';
-import { signOut } from '@/features/auth/api';
 import { useProfile } from '@/features/auth/useProfile';
 import { useSession } from '@/features/auth/SessionProvider';
+import { takePendingInviteToken } from '@/features/connections/pending-invite';
 import type { GroupSummary, PendingInvite } from '@/features/groups/queries';
 import { useCountdown } from '@/features/groups/useCountdown';
 import { useHomeData } from '@/features/groups/useHomeData';
-import { initialsOf, parseIntervalToMinutes } from '@/lib/format';
+import { initialsOf, memberColor, parseIntervalToMinutes } from '@/lib/format';
 import { COLORS, FONTS, GRADIENTS, RADII, SECTION_LABEL, SPACING } from '@/lib/theme';
 
 export default function HomeScreen(): ReactElement {
@@ -41,20 +33,24 @@ export default function HomeScreen(): ReactElement {
   const otherGroups = summaries.filter((s) => s.activeTurn?.called_out_user_id !== userId);
 
   const handleAvatarPress = useCallback(() => {
-    Alert.alert('Sign out', 'Sign out of Callout on this device?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign Out',
-        style: 'destructive',
-        onPress: async () => {
-          const result = await signOut();
-          if (result.error) {
-            Alert.alert('Sign out failed', result.error.message);
-          }
-        },
-      },
-    ]);
-  }, []);
+    // Profile & settings live behind the avatar (D040); sign-out moved inside it.
+    router.push('/profile');
+  }, [router]);
+
+  // A share-invite token stashed before auth (deep link while signed out, or a code typed at sign-up) is claimed the moment the signed-in home appears (D036).
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      void takePendingInviteToken().then((token) => {
+        if (token && !cancelled) {
+          router.push(`/claim-invite?token=${token}`);
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }, [router]),
+  );
 
   return (
     <View style={styles.flex}>
@@ -84,10 +80,10 @@ export default function HomeScreen(): ReactElement {
                 />
               </Svg>
             </IconButton>
-            <Pressable onPress={handleAvatarPress} accessibilityLabel="Account options">
+            <Pressable onPress={handleAvatarPress} accessibilityLabel="Profile and settings">
               <Avatar
                 initials={profile ? initialsOf(profile.display_name) : '?'}
-                color={COLORS.invite}
+                color={userId ? memberColor(userId) : COLORS.invite}
                 size={36}
               />
             </Pressable>

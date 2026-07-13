@@ -13,6 +13,16 @@ export type Profile = {
   id: string;
   display_name: string;
   avatar_url: string | null;
+  /** Shareable short user ID (D032): server-generated, never client-writable. */
+  short_id: string;
+};
+
+export type Connection = {
+  id: string;
+  /** Pair columns are canonicalized (user_a_id < user_b_id); which side is "you" varies per row (D033). */
+  user_a_id: string;
+  user_b_id: string;
+  created_at: string;
 };
 
 export type Group = {
