@@ -251,17 +251,21 @@ otp_expiry = 3600
 
 [auth.sms]
 # Allow/disallow new user signups via SMS to your project.
-enable_signup = false
+# Phone is a real second auth method (D037). Locally this runs against the test_otp map below with no SMS provider (D043); the hosted project needs a real provider configured in the dashboard before phone auth reaches real users.
+enable_signup = true
 # If enabled, users need to confirm their phone number before signing in.
-enable_confirmations = false
+enable_confirmations = true
 # Template for sending OTP to users
 template = "Your code is {{ .Code }}"
 # Controls the minimum amount of time that must pass before sending another sms otp.
 max_frequency = "5s"
 
 # Use pre-defined map of phone number to OTP for testing.
-# [auth.sms.test_otp]
-# 4152127777 = "123456"
+# Local-only stand-in for a real SMS provider (D043): these numbers accept the fixed code below and no SMS is ever sent. Covers sign-up, sign-in, and phone-change verification flows in development.
+[auth.sms.test_otp]
+15005550001 = "123456"
+15005550002 = "123456"
+15005550003 = "123456"
 
 # Configure logged in session timeouts.
 # [auth.sessions]
