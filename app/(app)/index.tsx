@@ -1,36 +1,44 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useCallback, type ReactElement } from 'react';
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 
 import { Avatar } from '@/components/Avatar';
 import { BottomNav } from '@/components/BottomNav';
+import { ErrorBanner } from '@/components/ErrorBanner';
 import { IconButton } from '@/components/IconButton';
 import { signOut } from '@/features/auth/api';
 import { useProfile } from '@/features/auth/useProfile';
-import {
-  getPlaceholderMember,
-  PLACEHOLDER_GROUPS,
-  type PlaceholderGroup,
-} from '@/lib/placeholder-data';
+import { useSession } from '@/features/auth/SessionProvider';
+import type { GroupSummary, PendingInvite } from '@/features/groups/queries';
+import { useCountdown } from '@/features/groups/useCountdown';
+import { useHomeData } from '@/features/groups/useHomeData';
+import { initialsOf, parseIntervalToMinutes } from '@/lib/format';
 import { COLORS, FONTS, GRADIENTS, RADII, SECTION_LABEL, SPACING } from '@/lib/theme';
 
 export default function HomeScreen(): ReactElement {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { session } = useSession();
   const { profile } = useProfile();
+  const { data, isLoading, error } = useHomeData();
 
-  const myTurnGroup = PLACEHOLDER_GROUPS.find((g) => g.isMyTurn);
-  const otherGroups = PLACEHOLDER_GROUPS.filter((g) => !g.isMyTurn);
+  const userId = session?.user.id ?? null;
+  const summaries = data?.summaries ?? [];
+  const invites = data?.invites ?? [];
 
-  const initials =
-    profile?.display_name
-      .split(/\s+/)
-      .map((part) => part[0]?.toUpperCase() ?? '')
-      .slice(0, 2)
-      .join('') ?? '?';
+  const myTurnGroups = summaries.filter((s) => s.activeTurn?.called_out_user_id === userId);
+  const otherGroups = summaries.filter((s) => s.activeTurn?.called_out_user_id !== userId);
 
   const handleAvatarPress = useCallback(() => {
     Alert.alert('Sign out', 'Sign out of Callout on this device?', [
@@ -77,42 +85,74 @@ export default function HomeScreen(): ReactElement {
               </Svg>
             </IconButton>
             <Pressable onPress={handleAvatarPress} accessibilityLabel="Account options">
-              <Avatar initials={initials} color={COLORS.invite} size={36} />
+              <Avatar
+                initials={profile ? initialsOf(profile.display_name) : '?'}
+                color={COLORS.invite}
+                size={36}
+              />
             </Pressable>
           </View>
         </View>
 
-        {/* My Turn hero */}
-        {myTurnGroup && <MyTurnHero group={myTurnGroup} />}
+        {error !== null && (
+          <View style={styles.bannerWrap}>
+            <ErrorBanner message={error} />
+          </View>
+        )}
+
+        {isLoading && (
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator color={COLORS.ember} />
+          </View>
+        )}
+
+        {/* My Turn heroes — the primary in-app "you've been called out" indicator */}
+        {myTurnGroups.map((summary) => (
+          <MyTurnHero key={summary.group.id} summary={summary} />
+        ))}
 
         {/* Other groups */}
-        <Text style={styles.sectionLabel}>Other Groups</Text>
-        <View style={styles.groupList}>
-          {otherGroups.map((group) => (
-            <GroupCard key={group.id} group={group} />
-          ))}
-        </View>
+        {otherGroups.length > 0 && (
+          <>
+            <Text style={styles.sectionLabel}>
+              {myTurnGroups.length > 0 ? 'Other Groups' : 'Your Groups'}
+            </Text>
+            <View style={styles.groupList}>
+              {otherGroups.map((summary) => (
+                <GroupCard key={summary.group.id} summary={summary} />
+              ))}
+            </View>
+          </>
+        )}
 
-        {/* Pending invite */}
-        <Pressable
-          onPress={() => router.push('/join')}
-          style={({ pressed }) => [styles.inviteBanner, pressed && styles.pressed]}
-        >
-          <View style={styles.inviteIcon}>
-            <Svg width={18} height={18} viewBox="0 0 18 18" fill="none">
-              <Path
-                d="M9 3v12M3 9h12"
-                stroke={COLORS.invite}
-                strokeWidth={2.5}
-                strokeLinecap="round"
-              />
-            </Svg>
+        {/* Empty state */}
+        {!isLoading && error === null && summaries.length === 0 && invites.length === 0 && (
+          <View style={styles.emptyWrap}>
+            <Text style={styles.emptyEmoji}>🔥</Text>
+            <Text style={styles.emptyTitle}>No groups yet</Text>
+            <Text style={styles.emptySub}>
+              Start a group, invite your people, and pass the spotlight around.
+            </Text>
+            <Pressable
+              onPress={() => router.push('/create-group')}
+              style={({ pressed }) => pressed && styles.pressed}
+            >
+              <LinearGradient
+                colors={GRADIENTS.ember}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.emptyButton}
+              >
+                <Text style={styles.emptyButtonLabel}>Create your first group</Text>
+              </LinearGradient>
+            </Pressable>
           </View>
-          <View>
-            <Text style={styles.inviteTitle}>You have 1 pending invite</Text>
-            <Text style={styles.inviteSub}>Sam invited you to &quot;Fam Vibes&quot; →</Text>
-          </View>
-        </Pressable>
+        )}
+
+        {/* Pending invites */}
+        {invites.map((invite) => (
+          <InviteBanner key={invite.group.id} invite={invite} />
+        ))}
       </ScrollView>
 
       <BottomNav active="home" />
@@ -120,14 +160,15 @@ export default function HomeScreen(): ReactElement {
   );
 }
 
-function MyTurnHero({ group }: { group: PlaceholderGroup }): ReactElement {
+function MyTurnHero({ summary }: { summary: GroupSummary }): ReactElement {
   const router = useRouter();
-  const members = group.memberIds.map(getPlaceholderMember);
+  const windowMinutes = parseIntervalToMinutes(summary.group.per_turn_deadline);
+  const countdown = useCountdown(summary.activeTurn?.deadline_at ?? null, windowMinutes);
 
   return (
     <View style={styles.heroWrap}>
       <Pressable
-        onPress={() => router.push(`/group/${group.id}/my-turn`)}
+        onPress={() => router.push(`/group/${summary.group.id}/my-turn`)}
         style={({ pressed }) => pressed && styles.pressed}
       >
         <LinearGradient
@@ -140,22 +181,24 @@ function MyTurnHero({ group }: { group: PlaceholderGroup }): ReactElement {
             <View style={styles.heroBadge}>
               <Text style={styles.heroBadgeText}>🔥 Your Turn</Text>
             </View>
-            <Text style={styles.heroTime}>{group.timeLeftLabel} left</Text>
+            <Text style={styles.heroTime}>{countdown.label} left</Text>
           </View>
-          <Text style={styles.heroName}>{group.name}</Text>
-          <Text style={styles.heroUpdate}>{group.lastUpdate}</Text>
+          <Text style={styles.heroName}>{summary.group.name}</Text>
+          <Text style={styles.heroUpdate} numberOfLines={2}>
+            {latestUpdateLine(summary) ?? 'You’re up — share something with the group.'}
+          </Text>
           <View style={styles.heroBottomRow}>
             <View style={styles.avatarStack}>
-              {members.map((m, i) => (
+              {summary.members.map((m, i) => (
                 <View
-                  key={m.id}
-                  style={{ marginLeft: i === 0 ? 0 : -10, zIndex: members.length - i }}
+                  key={m.userId}
+                  style={{ marginLeft: i === 0 ? 0 : -10, zIndex: summary.members.length - i }}
                 >
                   <Avatar
                     initials={m.initials}
                     color={COLORS.white}
                     size={28}
-                    ring={m.id === group.currentTurnMemberId}
+                    ring={m.userId === summary.activeTurn?.called_out_user_id}
                     ringColor={COLORS.white}
                   />
                 </View>
@@ -169,43 +212,92 @@ function MyTurnHero({ group }: { group: PlaceholderGroup }): ReactElement {
   );
 }
 
-function GroupCard({ group }: { group: PlaceholderGroup }): ReactElement {
+function latestUpdateLine(summary: GroupSummary): string | null {
+  if (!summary.latestUpdate) {
+    return null;
+  }
+  const author = summary.members.find((m) => m.userId === summary.latestUpdate?.authorId);
+  const firstName = author?.displayName.split(/\s+/)[0] ?? 'Someone';
+  return `${firstName}: “${summary.latestUpdate.text}”`;
+}
+
+function GroupCard({ summary }: { summary: GroupSummary }): ReactElement {
   const router = useRouter();
-  const members = group.memberIds.map(getPlaceholderMember);
-  const turnMember = getPlaceholderMember(group.currentTurnMemberId);
-  // Mirrors the prototype's urgency heuristic: minutes-scale time remaining renders amber. Real urgency derives from server deadlines in Phase 3.
-  const isUrgent = group.timeLeftLabel.includes('m') && !group.timeLeftLabel.includes('h');
+  const windowMinutes = parseIntervalToMinutes(summary.group.per_turn_deadline);
+  const countdown = useCountdown(summary.activeTurn?.deadline_at ?? null, windowMinutes);
+
+  const holder = summary.members.find((m) => m.userId === summary.activeTurn?.called_out_user_id);
+  const statusLine =
+    summary.group.status === 'setup'
+      ? 'Waiting to start'
+      : summary.group.status === 'paused'
+        ? 'Paused — needs more members'
+        : holder
+          ? `${holder.displayName.split(/\s+/)[0]}’s turn`
+          : 'Between turns';
 
   return (
     <Pressable
-      onPress={() => router.push(`/group/${group.id}`)}
+      onPress={() => router.push(`/group/${summary.group.id}`)}
       style={({ pressed }) => [styles.groupCard, pressed && styles.pressed]}
     >
       <View style={styles.groupCardTop}>
         <View>
-          <Text style={styles.groupName}>{group.name}</Text>
-          <Text style={styles.groupTurn}>{turnMember.name}&apos;s turn</Text>
+          <Text style={styles.groupName}>{summary.group.name}</Text>
+          <Text style={styles.groupTurn}>{statusLine}</Text>
         </View>
-        <View style={[styles.timePill, isUrgent && styles.timePillUrgent]}>
-          <Text style={[styles.timePillText, isUrgent && styles.timePillTextUrgent]}>
-            {group.timeLeftLabel}
-          </Text>
-        </View>
+        {summary.activeTurn !== null && (
+          <View style={[styles.timePill, countdown.urgent && styles.timePillUrgent]}>
+            <Text style={[styles.timePillText, countdown.urgent && styles.timePillTextUrgent]}>
+              {countdown.label}
+            </Text>
+          </View>
+        )}
       </View>
-      <Text style={styles.groupUpdate} numberOfLines={1}>
-        {group.lastUpdate}
-      </Text>
+      {latestUpdateLine(summary) !== null && (
+        <Text style={styles.groupUpdate} numberOfLines={1}>
+          {latestUpdateLine(summary)}
+        </Text>
+      )}
       <View style={styles.avatarStack}>
-        {members.map((m, i) => (
-          <View key={m.id} style={{ marginLeft: i === 0 ? 0 : -8, zIndex: members.length - i }}>
+        {summary.members.map((m, i) => (
+          <View
+            key={m.userId}
+            style={{ marginLeft: i === 0 ? 0 : -8, zIndex: summary.members.length - i }}
+          >
             <Avatar
               initials={m.initials}
               color={m.color}
               size={26}
-              ring={m.id === group.currentTurnMemberId}
+              ring={m.userId === summary.activeTurn?.called_out_user_id}
             />
           </View>
         ))}
+      </View>
+    </Pressable>
+  );
+}
+
+function InviteBanner({ invite }: { invite: PendingInvite }): ReactElement {
+  const router = useRouter();
+
+  return (
+    <Pressable
+      onPress={() => router.push(`/join?groupId=${invite.group.id}`)}
+      style={({ pressed }) => [styles.inviteBanner, pressed && styles.pressed]}
+    >
+      <View style={styles.inviteIcon}>
+        <Svg width={18} height={18} viewBox="0 0 18 18" fill="none">
+          <Path d="M9 3v12M3 9h12" stroke={COLORS.invite} strokeWidth={2.5} strokeLinecap="round" />
+        </Svg>
+      </View>
+      <View>
+        <Text style={styles.inviteTitle}>You have a pending invite</Text>
+        <Text style={styles.inviteSub}>
+          {invite.inviterName
+            ? `${invite.inviterName.split(/\s+/)[0]} invited you to “${invite.group.name}” →`
+            : `You’ve been invited to “${invite.group.name}” →`}
+        </Text>
       </View>
     </Pressable>
   );
@@ -215,12 +307,50 @@ const styles = StyleSheet.create({
   avatarStack: {
     flexDirection: 'row',
   },
+  bannerWrap: {
+    paddingBottom: 16,
+    paddingHorizontal: SPACING.screenX,
+  },
   brand: {
     color: COLORS.textPrimary,
     fontFamily: FONTS.displayBlack,
     fontSize: 28,
     letterSpacing: -0.8,
     lineHeight: 30,
+  },
+  emptyButton: {
+    borderRadius: RADII.button,
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+  },
+  emptyButtonLabel: {
+    color: COLORS.white,
+    fontFamily: FONTS.display,
+    fontSize: 15,
+  },
+  emptyEmoji: {
+    fontSize: 40,
+    marginBottom: 12,
+  },
+  emptySub: {
+    color: COLORS.textSecondary,
+    fontFamily: FONTS.body,
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 24,
+    textAlign: 'center',
+  },
+  emptyTitle: {
+    color: COLORS.textPrimary,
+    fontFamily: FONTS.displayBlack,
+    fontSize: 24,
+    letterSpacing: -0.8,
+    marginBottom: 8,
+  },
+  emptyWrap: {
+    alignItems: 'center',
+    paddingHorizontal: 40,
+    paddingVertical: 48,
   },
   flex: {
     backgroundColor: COLORS.background,
@@ -369,6 +499,9 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontFamily: FONTS.display,
     fontSize: 14,
+  },
+  loadingWrap: {
+    paddingVertical: 48,
   },
   pressed: {
     opacity: 0.85,

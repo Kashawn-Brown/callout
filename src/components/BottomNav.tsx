@@ -6,9 +6,9 @@ import Svg, { Circle, Path } from 'react-native-svg';
 
 import { COLORS, FONTS } from '@/lib/theme';
 
-type TabId = 'home' | 'create' | 'activity';
+type TabId = 'home' | 'create';
 
-/** The prototype's bottom bar (Groups / New / Activity). Activity points at the placeholder group's detail screen until Phase 3 gives it a real cross-group feed. */
+/** The prototype's bottom bar, reduced to the tabs that lead somewhere real. The prototype's third tab (a cross-group Activity feed) has no MVP backing surface — per-group activity lives on the group detail screen — so it returns only when a later phase builds that feed. */
 export function BottomNav({ active }: { active: TabId }): ReactElement {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -21,12 +21,6 @@ export function BottomNav({ active }: { active: TabId }): ReactElement {
   }[] = [
     { id: 'home', label: 'Groups', icon: homeIcon, onPress: () => router.push('/') },
     { id: 'create', label: 'New', icon: plusIcon, onPress: () => router.push('/create-group') },
-    {
-      id: 'activity',
-      label: 'Activity',
-      icon: activityIcon,
-      onPress: () => router.push('/group/g1'),
-    },
   ];
 
   return (
@@ -81,20 +75,6 @@ function plusIcon(active: boolean): ReactElement {
         stroke={stroke(active)}
         strokeWidth={1.8}
         strokeLinecap="round"
-      />
-    </Svg>
-  );
-}
-
-function activityIcon(active: boolean): ReactElement {
-  return (
-    <Svg width={22} height={22} viewBox="0 0 22 22" fill="none">
-      <Path
-        d="M3 11h3l3-7 4 14 3-7h3"
-        stroke={stroke(active)}
-        strokeWidth={1.8}
-        strokeLinecap="round"
-        strokeLinejoin="round"
       />
     </Svg>
   );

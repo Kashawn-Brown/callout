@@ -1,27 +1,85 @@
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState, type ReactElement } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 
 import { Avatar } from '@/components/Avatar';
+import { ErrorBanner } from '@/components/ErrorBanner';
 import { GradientButton } from '@/components/GradientButton';
-import { getPlaceholderMember } from '@/lib/placeholder-data';
+import { useSession } from '@/features/auth/SessionProvider';
+import { callOutPlayer } from '@/features/groups/api';
+import type { MemberView } from '@/features/groups/queries';
+import { useGroupDetail } from '@/features/groups/useGroupDetail';
+import { deadlineLabel, parseIntervalToMinutes } from '@/lib/format';
 import { COLORS, FONTS, RADII, SPACING } from '@/lib/theme';
-
-// Placeholder eligible pool mirroring the prototype: everyone but the member who just went. Phase 3 replaces this with the fairness-window query — only not-yet-gone-this-round members ever appear, with no override (CLAUDE.md §2.6, D014).
-const ELIGIBLE_MEMBER_IDS = ['u2', 'u3', 'u4'];
 
 export default function PickNextScreen(): ReactElement {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { id, turnId } = useLocalSearchParams<{ id: string; turnId?: string }>();
+  const { session } = useSession();
+  const { detail, isLoading, error } = useGroupDetail(id ?? null);
+
   const [pickedId, setPickedId] = useState<string | null>(null);
-  const [sent, setSent] = useState(false);
+  const [sentTo, setSentTo] = useState<MemberView | null>(null);
+  const [callError, setCallError] = useState<string | null>(null);
+  const [isCalling, setIsCalling] = useState(false);
 
-  const eligible = ELIGIBLE_MEMBER_IDS.map(getPlaceholderMember);
-  const picked = pickedId ? getPlaceholderMember(pickedId) : null;
+  const userId = session?.user.id ?? null;
 
-  if (sent && picked) {
+  // The turn being handed off: passed from the submit flow, else this user's submitted turn awaiting hand-off (re-entering after closing the app mid-flow).
+  const handoffTurn =
+    detail?.turnsThisRound.find((t) =>
+      turnId ? t.id === turnId : t.called_out_user_id === userId && t.status === 'submitted',
+    ) ?? null;
+
+  // Display mirror of the fairness window (D014): only active members with no turn this round appear, minus the picker. The server enforces the same rule in call_out_player — this list can never offer an ineligible target, and there is no override.
+  const eligible =
+    detail?.members.filter(
+      (m) =>
+        m.status === 'active' &&
+        m.userId !== userId &&
+        !detail.turnsThisRound.some((t) => t.called_out_user_id === m.userId),
+    ) ?? [];
+
+  const windowMinutes = detail ? parseIntervalToMinutes(detail.group.per_turn_deadline) : null;
+  const windowLabel = windowMinutes !== null ? deadlineLabel(windowMinutes) : 'their window';
+  const picked = eligible.find((m) => m.userId === pickedId) ?? null;
+
+  // Plain function rather than useCallback: `picked` derives from the fetched roster each render, so manual memoization cannot be preserved (react-hooks/preserve-manual-memoization) and nothing downstream needs a stable reference.
+  const handleCallOut = async (): Promise<void> => {
+    if (!picked || !handoffTurn) {
+      return;
+    }
+    setIsCalling(true);
+    setCallError(null);
+    const result = await callOutPlayer({
+      target_turn_id: handoffTurn.id,
+      target_user_id: picked.userId,
+    });
+    setIsCalling(false);
+    if (result.error) {
+      // deadline_passed / handoff_already_made mean the system picked first (D029) — surface it; the group screen shows who is actually up.
+      setCallError(result.error.message);
+      return;
+    }
+    setSentTo(picked);
+  };
+
+  if (isLoading || detail === null) {
+    return (
+      <View style={[styles.flex, styles.centerWrap, { paddingTop: insets.top }]}>
+        {error !== null ? (
+          <ErrorBanner message={error} />
+        ) : (
+          <ActivityIndicator color={COLORS.ember} />
+        )}
+      </View>
+    );
+  }
+
+  if (sentTo !== null) {
     return (
       <View style={[styles.flex, styles.sentWrap, { paddingTop: insets.top }]}>
         <View style={styles.sentBadge}>
@@ -36,27 +94,47 @@ export default function PickNextScreen(): ReactElement {
           </Svg>
         </View>
         <Text style={styles.sentTitle}>Callout sent!</Text>
-        <Text style={styles.sentSub}>{picked.name.split(' ')[0]} is now on the clock ⏱</Text>
+        <Text style={styles.sentSub}>
+          {sentTo.displayName.split(/\s+/)[0]} is now on the clock ⏱
+        </Text>
 
         <View style={styles.sentCard}>
           <Avatar
-            initials={picked.initials}
-            color={picked.color}
+            initials={sentTo.initials}
+            color={sentTo.color}
             size={44}
             ring
             ringColor={COLORS.success}
           />
           <View>
-            <Text style={styles.sentCardName}>{picked.name}</Text>
-            <Text style={styles.sentCardNote}>Has 6 hours to respond</Text>
+            <Text style={styles.sentCardName}>{sentTo.displayName}</Text>
+            <Text style={styles.sentCardNote}>Has {windowLabel} to respond</Text>
           </View>
         </View>
 
         <Pressable
-          onPress={() => router.dismissTo('/')}
+          onPress={() => router.dismissTo(`/group/${detail.group.id}`)}
           style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
         >
-          <Text style={styles.backButtonLabel}>Back to Groups</Text>
+          <Text style={styles.backButtonLabel}>Back to Group</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  if (handoffTurn === null) {
+    return (
+      <View style={[styles.flex, styles.sentWrap, { paddingTop: insets.top }]}>
+        <Text style={styles.sentEmoji}>⏱</Text>
+        <Text style={styles.sentTitle}>Nothing to hand off</Text>
+        <Text style={styles.sentSub}>
+          The relay has already moved on — check the group to see who’s up.
+        </Text>
+        <Pressable
+          onPress={() => router.dismissTo(`/group/${detail.group.id}`)}
+          style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+        >
+          <Text style={styles.backButtonLabel}>Back to Group</Text>
         </Pressable>
       </View>
     );
@@ -82,18 +160,24 @@ export default function PickNextScreen(): ReactElement {
           </Svg>
           <Text style={styles.postedChipText}>Update posted</Text>
         </View>
-        <Text style={styles.title}>Who&apos;s up next?</Text>
-        <Text style={styles.subtitle}>Pick someone from Weekend Crew to call out</Text>
+        <Text style={styles.title}>Who’s up next?</Text>
+        <Text style={styles.subtitle}>Pick someone from {detail.group.name} to call out</Text>
       </View>
 
-      {/* Eligible members */}
+      {callError !== null && (
+        <View style={styles.bannerWrap}>
+          <ErrorBanner message={callError} />
+        </View>
+      )}
+
+      {/* Eligible members — the fairness-filtered pool (D014) */}
       <View style={styles.memberList}>
         {eligible.map((m) => {
-          const isPicked = pickedId === m.id;
+          const isPicked = pickedId === m.userId;
           return (
             <Pressable
-              key={m.id}
-              onPress={() => setPickedId(isPicked ? null : m.id)}
+              key={m.userId}
+              onPress={() => setPickedId(isPicked ? null : m.userId)}
               style={[
                 styles.memberCard,
                 isPicked && { backgroundColor: `${m.color}12`, borderColor: m.color },
@@ -101,8 +185,8 @@ export default function PickNextScreen(): ReactElement {
             >
               <Avatar initials={m.initials} color={m.color} size={48} ring={isPicked} />
               <View style={styles.memberInfo}>
-                <Text style={styles.memberName}>{m.name}</Text>
-                <Text style={styles.memberNote}>Responded 2 rounds ago</Text>
+                <Text style={styles.memberName}>{m.displayName}</Text>
+                <Text style={styles.memberNote}>Hasn’t gone this round</Text>
               </View>
               <View
                 style={[styles.radio, isPicked && { backgroundColor: m.color, borderWidth: 0 }]}
@@ -124,15 +208,21 @@ export default function PickNextScreen(): ReactElement {
         })}
       </View>
 
-      {/* Call out — flips to the sent state; the real call_out RPC arrives in Phase 3 */}
+      {/* Call out */}
       <View style={styles.ctaWrap}>
         <GradientButton
-          label={picked ? `Call Out ${picked.name.split(' ')[0]} 🔥` : 'Select someone first'}
-          onPress={() => setSent(true)}
-          disabled={!picked}
+          label={
+            isCalling
+              ? 'Calling out…'
+              : picked
+                ? `Call Out ${picked.displayName.split(/\s+/)[0]} 🔥`
+                : 'Select someone first'
+          }
+          onPress={handleCallOut}
+          disabled={!picked || isCalling}
         />
         <Text style={styles.ctaNote}>
-          They&apos;ll get a notification and have 6 hours to respond
+          They’ll see it in the app and have {windowLabel} to respond
         </Text>
       </View>
     </ScrollView>
@@ -154,6 +244,15 @@ const styles = StyleSheet.create({
     color: COLORS.textPrimary,
     fontFamily: FONTS.display,
     fontSize: 15,
+  },
+  bannerWrap: {
+    paddingBottom: 16,
+    paddingHorizontal: SPACING.screenX,
+  },
+  centerWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
   },
   ctaNote: {
     color: COLORS.textSecondary,
@@ -269,6 +368,10 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bodySemiBold,
     fontSize: 12,
     marginTop: 2,
+  },
+  sentEmoji: {
+    fontSize: 40,
+    marginBottom: 12,
   },
   sentSub: {
     color: COLORS.textSecondary,

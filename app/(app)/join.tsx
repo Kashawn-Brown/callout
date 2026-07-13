@@ -1,49 +1,76 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
-import { useState, type ReactElement } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useCallback, useState, type ReactElement } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 
 import { Avatar } from '@/components/Avatar';
+import { ErrorBanner } from '@/components/ErrorBanner';
 import { GradientButton } from '@/components/GradientButton';
 import { IconButton } from '@/components/IconButton';
-import { getPlaceholderMember } from '@/lib/placeholder-data';
+import { respondToInvite } from '@/features/groups/api';
+import { useHomeData } from '@/features/groups/useHomeData';
+import { deadlineLabel, parseIntervalToMinutes } from '@/lib/format';
 import { COLORS, FONTS, GRADIENTS, RADII, SPACING } from '@/lib/theme';
-
-// Placeholder invite mirroring the prototype's "Fam Vibes" invite. Phase 3 replaces this with real membership rows in status=invited (D025 grants invited users the group row and roster, nothing else).
-const INVITER_ID = 'u3';
-const INVITE_MEMBER_IDS = ['u3', 'u4', 'u5'];
 
 type InviteDecision = 'accepted' | 'declined' | null;
 
 export default function JoinScreen(): ReactElement {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { groupId } = useLocalSearchParams<{ groupId?: string }>();
+  const { data, isLoading, error: loadError } = useHomeData();
+
   const [decision, setDecision] = useState<InviteDecision>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isResponding, setIsResponding] = useState(false);
 
-  const inviter = getPlaceholderMember(INVITER_ID);
-  const members = INVITE_MEMBER_IDS.map(getPlaceholderMember);
+  // A specific invite when deep-linked from the home banner, otherwise the first pending one (D025 gives an invited user the group row and roster to evaluate it).
+  const invite = data?.invites.find((i) => i.group.id === groupId) ?? data?.invites[0] ?? null;
 
-  if (decision === 'accepted') {
+  const respond = useCallback(
+    async (accept: boolean) => {
+      if (!invite) {
+        return;
+      }
+      setIsResponding(true);
+      setError(null);
+      const result = await respondToInvite({ target_group_id: invite.group.id, accept });
+      setIsResponding(false);
+      if (result.error) {
+        setError(result.error.message);
+        return;
+      }
+      setDecision(accept ? 'accepted' : 'declined');
+    },
+    [invite],
+  );
+
+  if (decision === 'accepted' && invite) {
     return (
       <View style={[styles.flex, styles.resultWrap, { paddingTop: insets.top }]}>
         <Text style={styles.resultEmoji}>🎉</Text>
-        <Text style={styles.resultTitle}>You&apos;re in Fam Vibes!</Text>
-        <Text style={styles.resultSub}>Now go check in when it&apos;s your turn</Text>
+        <Text style={styles.resultTitle}>You’re in {invite.group.name}!</Text>
+        <Text style={styles.resultSub}>Now go check in when it’s your turn</Text>
         <View style={styles.resultButtonWrap}>
-          <GradientButton label="Go to Groups →" onPress={() => router.dismissTo('/')} />
+          <GradientButton
+            label="Go to Group →"
+            onPress={() => router.dismissTo(`/group/${invite.group.id}`)}
+          />
         </View>
       </View>
     );
   }
 
-  if (decision === 'declined') {
+  if (decision === 'declined' && invite) {
     return (
       <View style={[styles.flex, styles.resultWrap, { paddingTop: insets.top }]}>
         <Text style={styles.resultEmoji}>👋</Text>
         <Text style={styles.resultTitle}>Invite declined</Text>
-        <Text style={styles.resultSub}>No worries — Sam won&apos;t be notified</Text>
+        <Text style={styles.resultSub}>
+          No worries — {invite.inviterName?.split(/\s+/)[0] ?? 'the host'} won’t be notified
+        </Text>
         <Pressable
           onPress={() => router.dismissTo('/')}
           style={({ pressed }) => [styles.plainButton, pressed && styles.pressed]}
@@ -53,6 +80,37 @@ export default function JoinScreen(): ReactElement {
       </View>
     );
   }
+
+  if (isLoading) {
+    return (
+      <View style={[styles.flex, styles.resultWrap, { paddingTop: insets.top }]}>
+        <ActivityIndicator color={COLORS.invite} />
+      </View>
+    );
+  }
+
+  if (!invite) {
+    return (
+      <View style={[styles.flex, styles.resultWrap, { paddingTop: insets.top }]}>
+        <Text style={styles.resultEmoji}>📭</Text>
+        <Text style={styles.resultTitle}>No pending invites</Text>
+        <Text style={styles.resultSub}>When someone invites you to a group, it shows up here.</Text>
+        <Pressable
+          onPress={() => router.dismissTo('/')}
+          style={({ pressed }) => [styles.plainButton, pressed && styles.pressed]}
+        >
+          <Text style={styles.plainButtonLabel}>Back to Home</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
+  const windowMinutes = parseIntervalToMinutes(invite.group.per_turn_deadline);
+  const stats = [
+    { label: 'Members', value: String(invite.members.length) },
+    { label: 'Deadline', value: windowMinutes !== null ? deadlineLabel(windowMinutes) : '—' },
+    { label: 'Status', value: invite.group.status === 'setup' ? 'Starting' : 'Playing' },
+  ];
 
   return (
     <ScrollView
@@ -75,14 +133,21 @@ export default function JoinScreen(): ReactElement {
       </View>
 
       <View style={styles.content}>
+        {(error !== null || loadError !== null) && (
+          <View style={styles.bannerWrap}>
+            <ErrorBanner message={error ?? loadError ?? ''} />
+          </View>
+        )}
+
         {/* Invited by */}
-        <View style={styles.inviterRow}>
-          <Avatar initials={inviter.initials} color={inviter.color} size={42} ring />
-          <Text style={styles.inviterText}>
-            <Text style={styles.inviterLabel}>Invited by </Text>
-            <Text style={[styles.inviterName, { color: inviter.color }]}>{inviter.name}</Text>
-          </Text>
-        </View>
+        {invite.inviterName !== null && (
+          <View style={styles.inviterRow}>
+            <Text style={styles.inviterText}>
+              <Text style={styles.inviterLabel}>Invited by </Text>
+              <Text style={styles.inviterName}>{invite.inviterName}</Text>
+            </Text>
+          </View>
+        )}
 
         {/* Group hero */}
         <View style={styles.heroCard}>
@@ -94,15 +159,11 @@ export default function JoinScreen(): ReactElement {
           >
             <Text style={styles.heroIconEmoji}>🏡</Text>
           </LinearGradient>
-          <Text style={styles.heroName}>Fam Vibes</Text>
-          <Text style={styles.heroDescription}>A cozy check-in group for the squad</Text>
+          <Text style={styles.heroName}>{invite.group.name}</Text>
+          <Text style={styles.heroDescription}>An invite-only relay group</Text>
 
           <View style={styles.statsRow}>
-            {[
-              { label: 'Members', value: '3' },
-              { label: 'Deadline', value: '1 day' },
-              { label: 'Rounds', value: '12' },
-            ].map(({ label, value }) => (
+            {stats.map(({ label, value }) => (
               <View key={label} style={styles.stat}>
                 <Text style={styles.statValue}>{value}</Text>
                 <Text style={styles.statLabel}>{label}</Text>
@@ -111,17 +172,14 @@ export default function JoinScreen(): ReactElement {
           </View>
 
           <View style={styles.memberStack}>
-            {members.map((m, i) => (
+            {invite.members.map((m, i) => (
               <View
-                key={m.id}
-                style={{ marginLeft: i === 0 ? 0 : -10, zIndex: members.length - i }}
+                key={m.userId}
+                style={{ marginLeft: i === 0 ? 0 : -10, zIndex: invite.members.length - i }}
               >
                 <Avatar initials={m.initials} color={m.color} size={32} />
               </View>
             ))}
-            <View style={styles.moreCircle}>
-              <Text style={styles.moreCircleText}>+</Text>
-            </View>
           </View>
         </View>
 
@@ -133,24 +191,27 @@ export default function JoinScreen(): ReactElement {
           <View style={styles.howText}>
             <Text style={styles.howTitle}>How Callout works</Text>
             <Text style={styles.howBody}>
-              Each person shares a quick update, then passes the turn to someone else. You have 1
-              day to respond before it auto-advances.
+              Each person shares a quick update, then passes the turn to someone else. You have{' '}
+              {windowMinutes !== null ? deadlineLabel(windowMinutes) : 'a set window'} to respond
+              before it auto-advances.
             </Text>
           </View>
         </View>
 
-        {/* Actions — flip local state only; the real accept/decline RPCs arrive in Phase 3 */}
+        {/* Actions */}
         <View style={styles.actionsRow}>
           <Pressable
-            onPress={() => setDecision('declined')}
+            onPress={() => respond(false)}
+            disabled={isResponding}
             style={({ pressed }) => [styles.declineButton, pressed && styles.pressed]}
           >
             <Text style={styles.declineLabel}>Decline</Text>
           </Pressable>
           <View style={styles.acceptWrap}>
             <GradientButton
-              label="Join Group 🎉"
-              onPress={() => setDecision('accepted')}
+              label={isResponding ? 'Joining…' : 'Join Group 🎉'}
+              onPress={() => respond(true)}
+              disabled={isResponding}
               variant="invite"
             />
           </View>
@@ -167,6 +228,9 @@ const styles = StyleSheet.create({
   actionsRow: {
     flexDirection: 'row',
     gap: 10,
+  },
+  bannerWrap: {
+    marginBottom: 16,
   },
   closeRow: {
     alignItems: 'flex-end',
@@ -271,6 +335,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   inviterName: {
+    color: COLORS.invite,
     fontFamily: FONTS.bodyBold,
     fontSize: 14,
   },
@@ -286,22 +351,6 @@ const styles = StyleSheet.create({
   memberStack: {
     flexDirection: 'row',
     justifyContent: 'center',
-  },
-  moreCircle: {
-    alignItems: 'center',
-    backgroundColor: COLORS.elevated,
-    borderColor: COLORS.border,
-    borderRadius: 16,
-    borderWidth: 2,
-    height: 32,
-    justifyContent: 'center',
-    marginLeft: -10,
-    width: 32,
-  },
-  moreCircleText: {
-    color: COLORS.textSecondary,
-    fontFamily: FONTS.display,
-    fontSize: 12,
   },
   plainButton: {
     alignItems: 'center',

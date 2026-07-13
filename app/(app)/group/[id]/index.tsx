@@ -1,52 +1,181 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import type { ReactElement } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useState, type ReactElement } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Svg, { Circle, Path } from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
 
 import { Avatar } from '@/components/Avatar';
 import { BackButton } from '@/components/BackButton';
 import { CountdownRing } from '@/components/CountdownRing';
+import { ErrorBanner } from '@/components/ErrorBanner';
 import { IconButton } from '@/components/IconButton';
-import {
-  getPlaceholderMember,
-  PLACEHOLDER_ACTIVITY,
-  PLACEHOLDER_GROUPS,
-} from '@/lib/placeholder-data';
+import { useSession } from '@/features/auth/SessionProvider';
+import { removePlayer, skipTurn, startGame } from '@/features/groups/api';
+import type { GroupDetail, MemberView } from '@/features/groups/queries';
+import { useCountdown } from '@/features/groups/useCountdown';
+import { useGroupDetail } from '@/features/groups/useGroupDetail';
+import { deadlineLabel, parseIntervalToMinutes, timeAgoLabel } from '@/lib/format';
+import { serverNow } from '@/lib/server-time';
+import type { Turn, TurnStatus } from '@/types/models';
 import { COLORS, FONTS, GRADIENTS, RADII, SECTION_LABEL, SPACING } from '@/lib/theme';
 
-// Placeholder per-member round status mirroring the prototype. Real values derive from Turn rows in Phase 3 — turn status is relay position, never conflated with submission validation (CLAUDE.md §2.5).
-type MemberRoundStatus = 'turn' | 'pending' | 'done' | 'waiting';
-
-const PLACEHOLDER_STATUSES: Record<string, MemberRoundStatus> = {
-  u1: 'turn',
-  u2: 'done',
-  u3: 'done',
-  u4: 'pending',
-};
+// Per-member relay status this round, derived from Turn rows — relay position only, never conflated with submission validation (CLAUDE.md §2.5).
+type MemberRoundStatus = 'turn' | 'done' | 'missed' | 'skipped' | 'waiting';
 
 const STATUS_LABELS: Record<MemberRoundStatus, string> = {
   turn: 'Up now',
-  pending: 'Pending',
   done: 'Done ✓',
+  missed: 'Missed',
+  skipped: 'Skipped',
   waiting: 'Waiting',
 };
 
 const STATUS_COLORS: Record<MemberRoundStatus, string> = {
   turn: COLORS.ember,
-  pending: COLORS.warning,
   done: COLORS.success,
+  missed: COLORS.warning,
+  skipped: COLORS.textSecondary,
   waiting: COLORS.textSecondary,
 };
+
+function memberStatusThisRound(userId: string, turnsThisRound: Turn[]): MemberRoundStatus {
+  const turn = turnsThisRound.find((t) => t.called_out_user_id === userId);
+  if (!turn) {
+    return 'waiting';
+  }
+  const byTurnStatus: Partial<Record<TurnStatus, MemberRoundStatus>> = {
+    pending: 'turn',
+    submitted: 'done',
+    missed: 'missed',
+    skipped: 'skipped',
+  };
+  return byTurnStatus[turn.status] ?? 'waiting';
+}
 
 export default function GroupDetailScreen(): ReactElement {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
+  const { session } = useSession();
+  const { detail, isLoading, error, refetch } = useGroupDetail(id ?? null);
 
-  const group = PLACEHOLDER_GROUPS.find((g) => g.id === id) ?? PLACEHOLDER_GROUPS[0];
-  const members = group.memberIds.map(getPlaceholderMember);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [isActing, setIsActing] = useState(false);
+
+  const userId = session?.user.id ?? null;
+  const isHost = detail !== null && userId !== null && detail.group.host_id === userId;
+
+  const handleStartGame = useCallback(async () => {
+    if (!detail) {
+      return;
+    }
+    setIsActing(true);
+    setActionError(null);
+    const result = await startGame({ target_group_id: detail.group.id });
+    setIsActing(false);
+    if (result.error) {
+      setActionError(result.error.message);
+    } else {
+      refetch();
+    }
+  }, [detail, refetch]);
+
+  const handleSkipTurn = useCallback(() => {
+    if (!detail?.activeTurn) {
+      return;
+    }
+    const turnId = detail.activeTurn.id;
+    const holder = detail.members.find((m) => m.userId === detail.activeTurn?.called_out_user_id);
+    Alert.alert(
+      'Skip this turn?',
+      `${holder?.displayName ?? 'This player'} loses their turn and the relay moves on.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Skip Turn',
+          style: 'destructive',
+          onPress: async () => {
+            setIsActing(true);
+            setActionError(null);
+            const result = await skipTurn({ target_turn_id: turnId });
+            setIsActing(false);
+            if (result.error) {
+              setActionError(result.error.message);
+            } else {
+              refetch();
+            }
+          },
+        },
+      ],
+    );
+  }, [detail, refetch]);
+
+  const handleRemoveMember = useCallback(
+    (member: MemberView) => {
+      if (!detail) {
+        return;
+      }
+      Alert.alert(
+        `Remove ${member.displayName}?`,
+        member.status === 'invited'
+          ? 'Their pending invite will be rescinded.'
+          : 'They lose access to the group. If they hold the live turn, the relay moves on without them.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Remove',
+            style: 'destructive',
+            onPress: async () => {
+              setIsActing(true);
+              setActionError(null);
+              const result = await removePlayer({
+                target_group_id: detail.group.id,
+                target_user_id: member.userId,
+              });
+              setIsActing(false);
+              if (result.error) {
+                setActionError(result.error.message);
+              } else {
+                refetch();
+              }
+            },
+          },
+        ],
+      );
+    },
+    [detail, refetch],
+  );
+
+  if (isLoading || detail === null) {
+    return (
+      <View style={[styles.flex, styles.centerWrap, { paddingTop: insets.top }]}>
+        {error !== null ? (
+          <ErrorBanner message={error} />
+        ) : (
+          <ActivityIndicator color={COLORS.ember} />
+        )}
+      </View>
+    );
+  }
+
+  const windowMinutes = parseIntervalToMinutes(detail.group.per_turn_deadline);
+  const holder = detail.members.find((m) => m.userId === detail.activeTurn?.called_out_user_id);
+  const isMyTurn = detail.activeTurn !== null && detail.activeTurn.called_out_user_id === userId;
+  const subtitle =
+    detail.group.status === 'setup'
+      ? `${detail.members.length} joined · waiting to start`
+      : detail.group.status === 'paused'
+        ? `${detail.members.length} members · paused`
+        : `${detail.members.length} members · Round ${detail.currentRound?.round_number ?? '—'}`;
 
   return (
     <ScrollView
@@ -58,51 +187,275 @@ export default function GroupDetailScreen(): ReactElement {
       <View style={styles.header}>
         <BackButton />
         <View style={styles.headerText}>
-          <Text style={styles.title}>{group.name}</Text>
-          <Text style={styles.subtitle}>{members.length} members · Round 3</Text>
+          <Text style={styles.title}>{detail.group.name}</Text>
+          <Text style={styles.subtitle}>{subtitle}</Text>
         </View>
-        <IconButton onPress={() => {}} accessibilityLabel="Group options">
-          <Svg width={16} height={16} viewBox="0 0 16 16" fill="none">
-            <Circle cx={4} cy={8} r={1.5} fill={COLORS.textSecondary} />
-            <Circle cx={8} cy={8} r={1.5} fill={COLORS.textSecondary} />
-            <Circle cx={12} cy={8} r={1.5} fill={COLORS.textSecondary} />
-          </Svg>
-        </IconButton>
+        {isHost && (
+          <IconButton
+            onPress={() => router.push(`/group/${detail.group.id}/invite`)}
+            accessibilityLabel="Invite a player"
+          >
+            <Svg width={16} height={16} viewBox="0 0 16 16" fill="none">
+              <Path
+                d="M8 3v10M3 8h10"
+                stroke={COLORS.textSecondary}
+                strokeWidth={2}
+                strokeLinecap="round"
+              />
+            </Svg>
+          </IconButton>
+        )}
       </View>
 
+      {(error !== null || actionError !== null) && (
+        <View style={styles.bannerWrap}>
+          <ErrorBanner message={actionError ?? error ?? ''} />
+        </View>
+      )}
+
+      {/* Setup state: waiting for players, host can start */}
+      {detail.group.status === 'setup' && (
+        <View style={styles.stateCardWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEmoji}>🚀</Text>
+            <Text style={styles.stateTitle}>Waiting to start</Text>
+            <Text style={styles.stateBody}>
+              {detail.invitedMembers.length > 0
+                ? `${detail.members.length} joined · ${detail.invitedMembers.length} invite${detail.invitedMembers.length === 1 ? '' : 's'} pending`
+                : `${detail.members.length} joined`}
+              {' · '}deadline {windowMinutes !== null ? deadlineLabel(windowMinutes) : '—'}
+            </Text>
+            {isHost ? (
+              <Pressable
+                onPress={handleStartGame}
+                disabled={isActing || detail.members.length < 2}
+                style={({ pressed }) => pressed && styles.pressed}
+              >
+                <LinearGradient
+                  colors={GRADIENTS.ember}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={[
+                    styles.startButton,
+                    detail.members.length < 2 && styles.startButtonDisabled,
+                  ]}
+                >
+                  <Text style={styles.startButtonLabel}>
+                    {detail.members.length < 2
+                      ? 'Need at least 2 players'
+                      : isActing
+                        ? 'Starting…'
+                        : 'Start Game 🔥'}
+                  </Text>
+                </LinearGradient>
+              </Pressable>
+            ) : (
+              <Text style={styles.stateHint}>The host starts the game once everyone’s in.</Text>
+            )}
+          </View>
+        </View>
+      )}
+
+      {/* Paused state */}
+      {detail.group.status === 'paused' && (
+        <View style={styles.stateCardWrap}>
+          <View style={styles.stateCard}>
+            <Text style={styles.stateEmoji}>⏸️</Text>
+            <Text style={styles.stateTitle}>Game paused</Text>
+            <Text style={styles.stateBody}>
+              Not enough active members to keep the relay going. It resumes automatically when
+              someone joins.
+            </Text>
+          </View>
+        </View>
+      )}
+
       {/* Active turn card */}
-      <View style={styles.activeCardWrap}>
-        <View style={styles.activeCard}>
-          <View style={styles.activeCardTop}>
-            <View style={styles.liveRow}>
-              <View style={styles.liveDot} />
-              <Text style={styles.liveLabel}>Active Turn</Text>
-            </View>
-            <Text style={styles.deadlineNote}>{group.deadlineLabel} deadline</Text>
-          </View>
+      {detail.group.status === 'active' && detail.activeTurn !== null && holder !== undefined && (
+        <ActiveTurnCard
+          detail={detail}
+          holder={holder}
+          isMyTurn={isMyTurn}
+          isHost={isHost}
+          windowMinutes={windowMinutes}
+          onSkip={handleSkipTurn}
+        />
+      )}
 
-          <View style={styles.activeCardBody}>
-            <Avatar
-              initials={getPlaceholderMember(group.currentTurnMemberId).initials}
-              color={COLORS.ember}
-              size={52}
-              ring
-              ringColor={COLORS.ember}
-            />
-            <View style={styles.activeCardInfo}>
-              <Text style={styles.activeName}>
-                {getPlaceholderMember(group.currentTurnMemberId).name}
-              </Text>
-              <Text style={styles.activeSub}>That&apos;s you!</Text>
-              <View style={styles.respondPill}>
-                <Text style={styles.respondPillText}>You&apos;re up — respond now</Text>
+      {/* Members grid */}
+      <View style={styles.section}>
+        <Text style={styles.sectionLabel}>Members</Text>
+        <View style={styles.membersGrid}>
+          {detail.members.map((m) => {
+            const status = memberStatusThisRound(m.userId, detail.turnsThisRound);
+            const isTurn = status === 'turn';
+            const removable = isHost && m.userId !== userId;
+            return (
+              <Pressable
+                key={m.userId}
+                onLongPress={removable ? () => handleRemoveMember(m) : undefined}
+                style={[styles.memberCard, isTurn && styles.memberCardTurn]}
+              >
+                <Avatar
+                  initials={m.initials}
+                  color={m.color}
+                  size={36}
+                  ring={isTurn}
+                  ringColor={STATUS_COLORS[status]}
+                />
+                <View>
+                  <Text style={styles.memberName}>{m.displayName.split(/\s+/)[0]}</Text>
+                  <Text style={[styles.memberStatus, { color: STATUS_COLORS[status] }]}>
+                    {detail.group.status === 'active'
+                      ? STATUS_LABELS[status]
+                      : m.role === 'host'
+                        ? 'Host'
+                        : 'Joined'}
+                  </Text>
+                </View>
+              </Pressable>
+            );
+          })}
+          {detail.invitedMembers.map((m) => (
+            <Pressable
+              key={m.userId}
+              onLongPress={isHost ? () => handleRemoveMember(m) : undefined}
+              style={[styles.memberCard, styles.memberCardInvited]}
+            >
+              <Avatar initials={m.initials} color={m.color} size={36} />
+              <View>
+                <Text style={styles.memberName}>{m.displayName.split(/\s+/)[0]}</Text>
+                <Text style={[styles.memberStatus, { color: COLORS.invite }]}>Invited</Text>
               </View>
-            </View>
-            <CountdownRing timeLabel={group.timeLeftLabel} pct={0.74} size={80} />
-          </View>
+            </Pressable>
+          ))}
+        </View>
+        {isHost && <Text style={styles.hostHint}>Long-press a member to remove them.</Text>}
+      </View>
 
+      {/* Activity feed */}
+      {detail.activity.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>Activity</Text>
+          {detail.activity.map((item, idx) => {
+            const author = detail.members.find((m) => m.userId === item.authorId);
+            const nextHolder = detail.members.find((m) => m.userId === item.nextHolderId);
+            const isLast = idx === detail.activity.length - 1;
+            return (
+              <View
+                key={item.turnId}
+                style={[styles.activityItem, !isLast && styles.activityItemGap]}
+              >
+                {!isLast && <View style={styles.timelineLine} />}
+                <View style={styles.activityAvatar}>
+                  <Avatar
+                    initials={author?.initials ?? '?'}
+                    color={author?.color ?? COLORS.textSecondary}
+                    size={34}
+                  />
+                </View>
+                <View style={styles.activityCard}>
+                  <View style={styles.activityHeader}>
+                    <Text
+                      style={[
+                        styles.activityAuthor,
+                        { color: author?.color ?? COLORS.textSecondary },
+                      ]}
+                    >
+                      {author?.displayName.split(/\s+/)[0] ?? 'Former member'}
+                    </Text>
+                    <Text style={styles.activityTime}>
+                      {timeAgoLabel(item.submittedAt, serverNow().getTime())}
+                    </Text>
+                  </View>
+                  <Text style={styles.activityText}>{item.text}</Text>
+                  {nextHolder !== undefined && (
+                    <View style={styles.calloutRow}>
+                      <Svg width={10} height={10} viewBox="0 0 10 10" fill="none">
+                        <Path
+                          d="M1 5h8M6 2l3 3-3 3"
+                          stroke={COLORS.textSecondary}
+                          strokeWidth={1.5}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </Svg>
+                      <Text style={styles.calloutText}>
+                        {item.nextWasSystemPick
+                          ? `System called ${nextHolder.displayName.split(/\s+/)[0]}`
+                          : `Called out ${nextHolder.displayName.split(/\s+/)[0]}`}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              </View>
+            );
+          })}
+        </View>
+      )}
+    </ScrollView>
+  );
+}
+
+function ActiveTurnCard({
+  detail,
+  holder,
+  isMyTurn,
+  isHost,
+  windowMinutes,
+  onSkip,
+}: {
+  detail: GroupDetail;
+  holder: MemberView;
+  isMyTurn: boolean;
+  isHost: boolean;
+  windowMinutes: number | null;
+  onSkip: () => void;
+}): ReactElement {
+  const router = useRouter();
+  const countdown = useCountdown(detail.activeTurn?.deadline_at ?? null, windowMinutes);
+
+  return (
+    <View style={styles.activeCardWrap}>
+      <View style={styles.activeCard}>
+        <View style={styles.activeCardTop}>
+          <View style={styles.liveRow}>
+            <View style={styles.liveDot} />
+            <Text style={styles.liveLabel}>Active Turn</Text>
+          </View>
+          <Text style={styles.deadlineNote}>
+            {windowMinutes !== null ? `${deadlineLabel(windowMinutes)} deadline` : ''}
+          </Text>
+        </View>
+
+        <View style={styles.activeCardBody}>
+          <Avatar
+            initials={holder.initials}
+            color={COLORS.ember}
+            size={52}
+            ring
+            ringColor={COLORS.ember}
+          />
+          <View style={styles.activeCardInfo}>
+            <Text style={styles.activeName}>{holder.displayName}</Text>
+            <Text style={styles.activeSub}>{isMyTurn ? 'That’s you!' : 'On the clock'}</Text>
+            {isMyTurn && (
+              <View style={styles.respondPill}>
+                <Text style={styles.respondPillText}>You’re up — respond now</Text>
+              </View>
+            )}
+          </View>
+          <CountdownRing
+            timeLabel={countdown.label}
+            pct={countdown.pct}
+            size={80}
+            urgent={countdown.urgent}
+          />
+        </View>
+
+        {isMyTurn && (
           <Pressable
-            onPress={() => router.push(`/group/${group.id}/my-turn`)}
+            onPress={() => router.push(`/group/${detail.group.id}/my-turn`)}
             style={({ pressed }) => pressed && styles.pressed}
           >
             <LinearGradient
@@ -114,76 +467,18 @@ export default function GroupDetailScreen(): ReactElement {
               <Text style={styles.openTurnLabel}>Open My Turn →</Text>
             </LinearGradient>
           </Pressable>
-        </View>
-      </View>
+        )}
 
-      {/* Members grid */}
-      <View style={styles.section}>
-        <Text style={styles.sectionLabel}>Members</Text>
-        <View style={styles.membersGrid}>
-          {members.map((m) => {
-            const status = PLACEHOLDER_STATUSES[m.id] ?? 'waiting';
-            const isTurn = status === 'turn';
-            return (
-              <View key={m.id} style={[styles.memberCard, isTurn && styles.memberCardTurn]}>
-                <Avatar
-                  initials={m.initials}
-                  color={m.color}
-                  size={36}
-                  ring={isTurn}
-                  ringColor={STATUS_COLORS[status]}
-                />
-                <View>
-                  <Text style={styles.memberName}>{m.name.split(' ')[0]}</Text>
-                  <Text style={[styles.memberStatus, { color: STATUS_COLORS[status] }]}>
-                    {STATUS_LABELS[status]}
-                  </Text>
-                </View>
-              </View>
-            );
-          })}
-        </View>
+        {isHost && !isMyTurn && (
+          <Pressable
+            onPress={onSkip}
+            style={({ pressed }) => [styles.skipButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.skipButtonLabel}>Skip this turn</Text>
+          </Pressable>
+        )}
       </View>
-
-      {/* Activity feed */}
-      <View style={styles.section}>
-        <Text style={styles.sectionLabel}>Activity</Text>
-        {PLACEHOLDER_ACTIVITY.map((item, idx) => {
-          const member = getPlaceholderMember(item.memberId);
-          const passedTo = getPlaceholderMember(item.passedToMemberId);
-          const isLast = idx === PLACEHOLDER_ACTIVITY.length - 1;
-          return (
-            <View key={item.id} style={[styles.activityItem, !isLast && styles.activityItemGap]}>
-              {!isLast && <View style={styles.timelineLine} />}
-              <View style={styles.activityAvatar}>
-                <Avatar initials={member.initials} color={member.color} size={34} />
-              </View>
-              <View style={styles.activityCard}>
-                <View style={styles.activityHeader}>
-                  <Text style={[styles.activityAuthor, { color: member.color }]}>
-                    {member.name.split(' ')[0]}
-                  </Text>
-                  <Text style={styles.activityTime}>{item.timeLabel}</Text>
-                </View>
-                <Text style={styles.activityText}>{item.text}</Text>
-                <View style={styles.calloutRow}>
-                  <Svg width={10} height={10} viewBox="0 0 10 10" fill="none">
-                    <Path
-                      d="M1 5h8M6 2l3 3-3 3"
-                      stroke={COLORS.textSecondary}
-                      strokeWidth={1.5}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </Svg>
-                  <Text style={styles.calloutText}>Called out {passedTo.name.split(' ')[0]}</Text>
-                </View>
-              </View>
-            </View>
-          );
-        })}
-      </View>
-    </ScrollView>
+    </View>
   );
 }
 
@@ -266,6 +561,10 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.body,
     fontSize: 11,
   },
+  bannerWrap: {
+    paddingBottom: 16,
+    paddingHorizontal: SPACING.screenX,
+  },
   calloutRow: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -276,6 +575,11 @@ const styles = StyleSheet.create({
     color: COLORS.textSecondary,
     fontFamily: FONTS.bodySemiBold,
     fontSize: 11,
+  },
+  centerWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
   },
   deadlineNote: {
     color: COLORS.textSecondary,
@@ -295,6 +599,12 @@ const styles = StyleSheet.create({
   },
   headerText: {
     flex: 1,
+  },
+  hostHint: {
+    color: COLORS.textMuted,
+    fontFamily: FONTS.body,
+    fontSize: 11,
+    marginTop: 8,
   },
   liveDot: {
     backgroundColor: COLORS.ember,
@@ -325,6 +635,10 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     gap: 10,
     padding: 12,
+  },
+  memberCardInvited: {
+    borderStyle: 'dashed',
+    opacity: 0.7,
   },
   memberCardTurn: {
     backgroundColor: 'rgba(255,78,58,0.08)',
@@ -381,6 +695,70 @@ const styles = StyleSheet.create({
   sectionLabel: {
     ...SECTION_LABEL,
     marginBottom: 12,
+  },
+  skipButton: {
+    alignItems: 'center',
+    borderColor: COLORS.border,
+    borderRadius: 14,
+    borderWidth: 1.5,
+    marginTop: 16,
+    paddingVertical: 11,
+  },
+  skipButtonLabel: {
+    color: COLORS.textSecondary,
+    fontFamily: FONTS.display,
+    fontSize: 13,
+  },
+  startButton: {
+    borderRadius: RADII.button,
+    marginTop: 16,
+    paddingHorizontal: 28,
+    paddingVertical: 13,
+  },
+  startButtonDisabled: {
+    opacity: 0.4,
+  },
+  startButtonLabel: {
+    color: COLORS.white,
+    fontFamily: FONTS.display,
+    fontSize: 14,
+  },
+  stateBody: {
+    color: COLORS.textSecondary,
+    fontFamily: FONTS.body,
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
+  },
+  stateCard: {
+    alignItems: 'center',
+    backgroundColor: COLORS.card,
+    borderColor: COLORS.border,
+    borderRadius: RADII.hero,
+    borderWidth: 1,
+    paddingHorizontal: 24,
+    paddingVertical: 28,
+  },
+  stateCardWrap: {
+    paddingBottom: 16,
+    paddingHorizontal: SPACING.screenX,
+  },
+  stateEmoji: {
+    fontSize: 34,
+    marginBottom: 10,
+  },
+  stateHint: {
+    color: COLORS.textMuted,
+    fontFamily: FONTS.body,
+    fontSize: 12,
+    marginTop: 14,
+  },
+  stateTitle: {
+    color: COLORS.textPrimary,
+    fontFamily: FONTS.displayExtraBold,
+    fontSize: 20,
+    letterSpacing: -0.5,
+    marginBottom: 6,
   },
   subtitle: {
     color: COLORS.textSecondary,
