@@ -53,8 +53,9 @@ export function useHomeData(): UseHomeDataResult {
     if (!userId) {
       return;
     }
+    // The topic must be unique per hook instance, not per user: supabase.channel() returns the existing instance for a duplicate topic, and adding postgres_changes callbacks to an already-subscribed channel throws — home and join both run this hook concurrently (join stacks on top of a still-mounted home).
     const channel = supabase
-      .channel(`home-notifications-${userId}`)
+      .channel(`home-notifications-${userId}-${Math.random().toString(36).slice(2)}`)
       .on(
         'postgres_changes',
         {

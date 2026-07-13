@@ -50,8 +50,9 @@ export function useGroupDetail(groupId: string | null): UseGroupDetailResult {
       return;
     }
     const groupFilter = `group_id=eq.${groupId}`;
+    // The topic must be unique per hook instance, not per group: supabase.channel() returns the existing instance for a duplicate topic, and adding postgres_changes callbacks to an already-subscribed channel throws — group detail stays mounted beneath my-turn and pick-next, which both run this hook for the same group.
     const channel = supabase
-      .channel(`group-detail-${groupId}`)
+      .channel(`group-detail-${groupId}-${Math.random().toString(36).slice(2)}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'turn', filter: groupFilter },
