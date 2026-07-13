@@ -1,7 +1,7 @@
 -- Phase 3 — pgTAP verification of the MVP core-loop RPCs (run with `supabase test db`).
--- Drives the full relay through the public RPC surface exactly as PostgREST executes it (SET ROLE + request.jwt.claims per persona): group creation, invites, start, submit/hand-off with fairness, strict deadlines, the auto-advance job's miss and hand-off-timeout paths with idempotency, round completion/rollover with the back-to-back exclusion, and remove/pause/resume. References: decisions.md D029 (as amended by D042), D014, D010, D035.
+-- Drives the full relay through the public RPC surface exactly as PostgREST executes it (SET ROLE + request.jwt.claims per persona): group creation, invites, start, submit/hand-off with fairness, strict deadlines, the auto-advance job's miss and hand-off-timeout paths with idempotency, round completion/rollover with the back-to-back exclusion, and remove/pause/resume. References: decisions.md D029 (as amended by D042), D014, D010, D047, D049.
 -- Where the system picks randomly (D029), assertions check properties of the pick (eligibility, exclusions) rather than identities, except where exclusions make the pick fully deterministic.
--- Phase 3B updated this suite: the retired search_profiles tests are gone (D035 — connections RPCs are covered in rpc_connections.sql), invites now require seeded connections, and submit assertions cover the D042 pick-window overwrite.
+-- Phase 3B updated this suite: creation is settings-only per D049 (people are added via invite_player, connection-free per D047 — the connections/join surface is covered in rpc_connections.sql), and submit assertions cover the D042 pick-window overwrite.
 
 begin;
 create extension if not exists pgtap with schema extensions;
@@ -19,13 +19,6 @@ insert into auth.users (id, email, raw_user_meta_data) values
   ('00000000-0000-0000-0000-00000000000c', 'cara@callout.test', '{"display_name": "Cara"}'::jsonb),
   ('00000000-0000-0000-0000-00000000000d', 'dave@callout.test', '{"display_name": "Dave"}'::jsonb),
   ('00000000-0000-0000-0000-00000000000e', 'evan@callout.test', '{"display_name": "Evan"}'::jsonb);
-
--- Invites are connection-only since D035, so the relay fixtures connect Alice (the host persona throughout) with everyone up front. The connections surface itself is covered in rpc_connections.sql.
-insert into public.connection (user_a_id, user_b_id) values
-  ('00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-00000000000b'),
-  ('00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-00000000000c'),
-  ('00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-00000000000d'),
-  ('00000000-0000-0000-0000-00000000000a', '00000000-0000-0000-0000-00000000000e');
 
 create temp table ctx (key text primary key, val text);
 grant all on ctx to public;
@@ -53,20 +46,17 @@ create function pg_temp.ctx_jsonb(target_key text) returns jsonb language sql as
 $$;
 
 -- ---------------------------------------------------------------------------
--- create_group: validation, connection-only invitees (D035), MVP-hardcoded settings, host + invited memberships, invite notifications.
+-- create_group (settings-only per D049) + creation-time invites via invite_player, connection-free per D047: validation, MVP-hardcoded settings, host + invited memberships, invite notifications.
 -- ---------------------------------------------------------------------------
-
--- Bob shares no connection with Cara, so he cannot invite her (D035).
-select pg_temp.impersonate('00000000-0000-0000-0000-00000000000b');
-select throws_ok($$ select public.create_group('No Friends Yet', 60, array['00000000-0000-0000-0000-00000000000c']::uuid[]) $$, 'P0001', 'You can only invite people from your connections.', 'create_group rejects invitees outside the caller''s connections (D035)');
 
 select pg_temp.impersonate('00000000-0000-0000-0000-00000000000a');
 
-select throws_ok($$ select public.create_group('', 60, array[]::uuid[]) $$, 'P0001', 'Group name must be between 1 and 80 characters.', 'create_group rejects an empty name');
-select throws_ok($$ select public.create_group('Relay Crew', 3, array[]::uuid[]) $$, 'P0001', 'Response deadline must be between 5 minutes and 7 days.', 'create_group rejects an out-of-range deadline');
-select throws_ok($$ select public.create_group('Relay Crew', 60, array['99999999-9999-9999-9999-999999999999']::uuid[]) $$, 'P0001', 'One of the invited users does not exist.', 'create_group rejects unknown invitees');
+select throws_ok($$ select public.create_group('', 60) $$, 'P0001', 'Group name must be between 1 and 80 characters.', 'create_group rejects an empty name');
+select throws_ok($$ select public.create_group('Relay Crew', 3) $$, 'P0001', 'Response deadline must be between 5 minutes and 7 days.', 'create_group rejects an out-of-range deadline');
 
-select pg_temp.ctx_set('group1', (public.create_group('Relay Crew', 60, array['00000000-0000-0000-0000-00000000000b', '00000000-0000-0000-0000-00000000000c']::uuid[]) ->> 'group_id'));
+select pg_temp.ctx_set('group1', (public.create_group('Relay Crew', 60) ->> 'group_id'));
+select lives_ok(format($f$ select public.invite_player('%s', '00000000-0000-0000-0000-00000000000b') $f$, pg_temp.ctx_uuid('group1')), 'the host invites Bob with no connection between them (D047)');
+select lives_ok(format($f$ select public.invite_player('%s', '00000000-0000-0000-0000-00000000000c') $f$, pg_temp.ctx_uuid('group1')), 'the host invites Cara with no connection between them (D047)');
 
 reset role;
 
@@ -82,7 +72,7 @@ select is((select count(*)::int from public.notification n where n.group_id = pg
 -- ---------------------------------------------------------------------------
 
 set local role anon;
-select throws_ok($$ select public.create_group('x', 60, array[]::uuid[]) $$, '42501', null, 'anon cannot execute create_group');
+select throws_ok($$ select public.create_group('x', 60) $$, '42501', null, 'anon cannot execute create_group');
 select throws_ok($$ select public.get_server_time() $$, '42501', null, 'anon cannot execute get_server_time');
 reset role;
 
