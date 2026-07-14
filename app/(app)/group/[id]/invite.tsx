@@ -176,6 +176,27 @@ export default function InvitePlayerScreen(): ReactElement {
         </View>
       )}
 
+      {/* Share the group — the join code, one mechanism (D063) */}
+      <View style={styles.section}>
+        <Text style={styles.sectionLabel}>Share the Group</Text>
+        <View style={styles.shareCard}>
+          <View style={styles.codeRow}>
+            <Text style={styles.codeLabel}>Group code</Text>
+            <Text style={styles.codeValue}>{detail?.group.join_code ?? '········'}</Text>
+          </View>
+          <Text style={styles.shareBody}>
+            Share this code to allow others to join the group.
+          </Text>
+          <Pressable
+            onPress={handleShare}
+            disabled={detail === null}
+            style={({ pressed }) => [styles.shareButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.shareButtonLabel}>Share</Text>
+          </Pressable>
+        </View>
+      </View>
+
       {/* Picker: search box above the default connections list (D059) */}
       <View style={styles.section}>
         <Text style={styles.sectionLabel}>Add People</Text>
@@ -315,28 +336,7 @@ export default function InvitePlayerScreen(): ReactElement {
         )}
       </View>
 
-      {/* Share the group — the join code, one mechanism (D063) */}
-      <View style={styles.section}>
-        <Text style={styles.sectionLabel}>Share the Group</Text>
-        <View style={styles.shareCard}>
-          <View style={styles.codeRow}>
-            <Text style={styles.codeLabel}>Group code</Text>
-            <Text style={styles.codeValue}>{detail?.group.join_code ?? '········'}</Text>
-          </View>
-          <Text style={styles.shareBody}>
-            Send it to one friend or a whole group chat. Before the game starts people join
-            instantly; after that, you approve each request. Removed members always need your
-            approval to come back.
-          </Text>
-          <Pressable
-            onPress={handleShare}
-            disabled={detail === null}
-            style={({ pressed }) => [styles.shareButton, pressed && styles.pressed]}
-          >
-            <Text style={styles.shareButtonLabel}>Share Code & Link</Text>
-          </Pressable>
-        </View>
-      </View>
+
 
       {/* Step-2 continue (D049) */}
       {isCreationFlow && detail !== null && (
@@ -547,6 +547,7 @@ const styles = StyleSheet.create({
   shareBody: {
     color: COLORS.textSecondary,
     fontFamily: FONTS.body,
+    textAlign: 'center',
     fontSize: 12,
     lineHeight: 18,
     marginTop: 12,
