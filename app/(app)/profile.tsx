@@ -244,12 +244,10 @@ export default function ProfileScreen(): ReactElement {
             )}
           </View>
 
-          {/* The name/ID/copy layout is the original card, untouched (D062); the share action lives on its own row below so it never disturbs this one. */}
-          <View style={styles.shortIdRow}>
-            <View>
-              <Text style={styles.shortIdLabel}>Your Callout ID</Text>
-              <Text style={styles.shortIdValue}>{profile?.short_id ?? '········'}</Text>
-            </View>
+          {/* Centered ID block (D062): label, the ID itself, and Copy stacked beneath it; the share action lives on its own row below so it never disturbs this block. */}
+          <View style={styles.shortIdBlock}>
+            <Text style={styles.shortIdLabel}>Your Callout ID</Text>
+            <Text style={styles.shortIdValue}>{profile?.short_id ?? '········'}</Text>
             <Pressable
               onPress={handleCopyId}
               style={({ pressed }) => [styles.copyButton, pressed && styles.pressed]}
@@ -866,23 +864,23 @@ const styles = StyleSheet.create({
     ...SECTION_LABEL,
     fontSize: 10,
   },
-  shortIdRow: {
+  shortIdBlock: {
     alignItems: 'center',
     backgroundColor: COLORS.elevated,
     borderRadius: RADII.input,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
     marginTop: 18,
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 14,
     width: '100%',
   },
   shortIdValue: {
     color: COLORS.textPrimary,
     fontFamily: FONTS.display,
-    fontSize: 18,
-    letterSpacing: 3,
-    marginTop: 2,
+    fontSize: 20,
+    letterSpacing: 4,
+    marginBottom: 10,
+    marginTop: 4,
+    textAlign: 'center',
   },
   signOutButton: {
     alignItems: 'center',
