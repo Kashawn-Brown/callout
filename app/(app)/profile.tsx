@@ -623,7 +623,6 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.elevated,
     borderRadius: RADII.pill,
     paddingHorizontal: 16,
-    paddingVertical: 8,
   },
   copyButtonLabel: {
     color: COLORS.textPrimary,
