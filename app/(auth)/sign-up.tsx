@@ -17,7 +17,7 @@ import { GradientButton } from '@/components/GradientButton';
 import { SegmentedToggle } from '@/components/SegmentedToggle';
 import { signUpWithEmail, signUpWithPhone } from '@/features/auth/api';
 import { PhoneOtpForm } from '@/features/auth/PhoneOtpForm';
-import { classifyInviteInput, stashPendingInvite } from '@/features/connections/pending-invite';
+import { normalizeJoinCode, stashPendingJoinCode } from '@/features/connections/pending-invite';
 import { COLORS, FONTS, SPACING } from '@/lib/theme';
 
 // Mirrors the profile.display_name check constraint (1–50 chars) so validation fails in the form, not in the database trigger.
@@ -48,18 +48,18 @@ export default function SignUpScreen(): ReactElement {
   const displayNameMissing =
     displayName.trim().length === 0 || displayName.trim().length > DISPLAY_NAME_MAX_LENGTH;
 
-  // Stashes a typed invite (a 16-character share token or an 8-character group code — D052's two shapes) so the home screen resumes it right after the session exists; returns false when input is present but malformed.
+  // Stashes a typed group code (D063 — the one invite shape) so the home screen resumes it right after the session exists, opening Join Group pre-filled (D064); returns false when input is present but malformed.
   const stashInviteIfPresent = useCallback(async (): Promise<boolean> => {
     const raw = inviteCode.trim();
     if (raw.length === 0) {
       return true;
     }
-    const invite = classifyInviteInput(raw);
-    if (!invite) {
-      setError('That code doesn’t look right — invite links use 16 characters, group codes use 8.');
+    const code = normalizeJoinCode(raw);
+    if (!code) {
+      setError('That code doesn’t look right — group codes are 8 letters and numbers.');
       return false;
     }
-    await stashPendingInvite(invite);
+    await stashPendingJoinCode(code);
     return true;
   }, [inviteCode]);
 
@@ -172,16 +172,17 @@ export default function SignUpScreen(): ReactElement {
 
           {showInviteField ? (
             <FormField
-              label="Invite or Group Code"
+              label="Group Code"
               value={inviteCode}
               onChangeText={setInviteCode}
-              placeholder="Code from a friend or a group"
+              placeholder="8-character code from a group"
               autoCapitalize="characters"
               autoCorrect={false}
+              maxLength={8}
             />
           ) : (
             <Pressable onPress={() => setShowInviteField(true)}>
-              <Text style={styles.inviteLink}>Have an invite code?</Text>
+              <Text style={styles.inviteLink}>Have a group code?</Text>
             </Pressable>
           )}
 

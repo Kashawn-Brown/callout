@@ -1,7 +1,8 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Linking from 'expo-linking';
-import { useCallback, useEffect, useState, type ReactElement } from 'react';
+import { useCallback, useState, type ReactElement } from 'react';
 import {
+  ActivityIndicator,
   Pressable,
   ScrollView,
   Share,
@@ -17,124 +18,139 @@ import { Avatar } from '@/components/Avatar';
 import { BackButton } from '@/components/BackButton';
 import { ErrorBanner } from '@/components/ErrorBanner';
 import { GradientButton } from '@/components/GradientButton';
-import { SegmentedToggle } from '@/components/SegmentedToggle';
-import { searchUsers } from '@/features/connections/api';
-import { createShareInvite, invitePlayer } from '@/features/groups/api';
+import { findUserByShortId } from '@/features/connections/api';
+import { useConnections } from '@/features/connections/useConnections';
+import { invitePlayer } from '@/features/groups/api';
 import { useGroupDetail } from '@/features/groups/useGroupDetail';
 import { initialsOf, memberColor } from '@/lib/format';
-import type { SearchUserRow } from '@/types/api';
 import { COLORS, FONTS, RADII, SECTION_LABEL, SPACING } from '@/lib/theme';
 
-const MIN_SEARCH_LENGTH = 2;
-const SEARCH_DEBOUNCE_MS = 300;
+/** One selectable person in the picker: an existing connection, or someone found by exact ID — the latter marked as a new invitee with the "+" badge (D061). */
+type PickerPerson = {
+  userId: string;
+  displayName: string;
+  color: string;
+  initials: string;
+  isNew: boolean;
+};
 
-type ShareMode = 'single' | 'open';
-
-/** Add people (host-only; step two of creation, D049, and the mid-game add). One search box does both jobs (D047): a full exact Callout ID or email finds anyone on the platform; a name finds people among the host's connections (D034). Someone without the app gets a share link — single-use personal token or the open join-code link (D052). */
+/** Add people (host-only; step two of creation, D049, and the mid-game add). The picker defaults to the full connections list, tap-to-select (D059); typing live-filters it by name (D034), and a full exact Callout ID is looked up only on a deliberate tap (D061). Sharing the group is the join code, sent as one pre-written message (D063). */
 export default function InvitePlayerScreen(): ReactElement {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { id, step } = useLocalSearchParams<{ id: string; step?: string }>();
   const { detail, refetch } = useGroupDetail(id ?? null);
+  const { connections, error: connectionsError } = useConnections();
 
   const [search, setSearch] = useState('');
-  // Results are stored with the query they answer and derived below, so stale answers and the too-short case need no synchronous setState in the effect (react-hooks/set-state-in-effect).
-  const [searchState, setSearchState] = useState<{ query: string; rows: SearchUserRow[] } | null>(
-    null,
-  );
+  const [selected, setSelected] = useState<PickerPerson[]>([]);
+  /** People found via exact-ID lookup this session, pinned to the top of the default list with their "+" badge (D061). */
+  const [foundPeople, setFoundPeople] = useState<PickerPerson[]>([]);
+  const [findNotice, setFindNotice] = useState<string | null>(null);
+  const [isFinding, setIsFinding] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [invitedIds, setInvitedIds] = useState<string[]>([]);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [shareMode, setShareMode] = useState<ShareMode>('single');
-  const [isSharing, setIsSharing] = useState(false);
+  const [isInviting, setIsInviting] = useState(false);
+  const [invitedCount, setInvitedCount] = useState<number | null>(null);
 
   const isCreationFlow = step === '2';
-
-  useEffect(() => {
-    const query = search.trim();
-    if (query.length < MIN_SEARCH_LENGTH) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      searchUsers({ search_query: query }).then((result) => {
-        if (result.error) {
-          setError(result.error.message);
-        } else {
-          setError(null);
-          // The server can return a connection twice when it matches both exactly and by name; keep the first (exact-sorted) row per user.
-          const seen = new Set<string>();
-          const rows = result.data.filter((row) => {
-            if (seen.has(row.user_id)) {
-              return false;
-            }
-            seen.add(row.user_id);
-            return true;
-          });
-          setSearchState({ query, rows });
-        }
-      });
-    }, SEARCH_DEBOUNCE_MS);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [search]);
-
-  const query = search.trim();
-  const results = searchState !== null && searchState.query === query ? searchState.rows : [];
-  const isSearching =
-    query.length >= MIN_SEARCH_LENGTH && (searchState === null || searchState.query !== query);
-
-  const handleInvite = useCallback(
-    async (row: SearchUserRow) => {
-      if (!id) {
-        return;
-      }
-      setBusyId(row.user_id);
-      setError(null);
-      const result = await invitePlayer({ target_group_id: id, target_user_id: row.user_id });
-      setBusyId(null);
-      if (result.error) {
-        setError(result.error.message);
-        return;
-      }
-      setInvitedIds((prev) => [...prev, row.user_id]);
-      refetch();
-    },
-    [id, refetch],
-  );
-
-  // Share sheet content per mode (D052): a fresh single-use token, or the group's persistent join code wrapped in a URL — the raw code rides along for channels that mangle links.
-  const handleShareLink = useCallback(async () => {
-    if (!id || !detail) {
-      return;
-    }
-    setError(null);
-    if (shareMode === 'single') {
-      setIsSharing(true);
-      const result = await createShareInvite({ target_group_id: id });
-      setIsSharing(false);
-      if (result.error) {
-        setError(result.error.message);
-        return;
-      }
-      const url = Linking.createURL('claim-invite', { queryParams: { token: result.data.token } });
-      await Share.share({
-        message: `Join my Callout group “${detail.group.name}”! Install the app, then open this link: ${url} — or sign up and enter invite code ${result.data.token}. This invite is for one person and works exactly once.`,
-      });
-    } else {
-      const url = Linking.createURL('join-group', {
-        queryParams: { code: detail.group.join_code },
-      });
-      await Share.share({
-        message: `Join my Callout group “${detail.group.name}”! Install the app, then open this link: ${url} — or use Join Group with code ${detail.group.join_code}. Anyone with the code can use it.`,
-      });
-    }
-  }, [id, detail, shareMode]);
 
   const memberIds = new Set([
     ...(detail?.members.map((m) => m.userId) ?? []),
     ...(detail?.invitedMembers.map((m) => m.userId) ?? []),
   ]);
+
+  const toggle = useCallback((person: PickerPerson): void => {
+    setSelected((prev) =>
+      prev.some((p) => p.userId === person.userId)
+        ? prev.filter((p) => p.userId !== person.userId)
+        : [...prev, person],
+    );
+  }, []);
+
+  // Deliberate exact-ID lookup (D061): fires on tap, never as-you-type.
+  const handleFindById = useCallback(async () => {
+    const query = search.trim();
+    if (query.length === 0) {
+      return;
+    }
+    setIsFinding(true);
+    setError(null);
+    setFindNotice(null);
+    const result = await findUserByShortId({ short_id_code: query });
+    setIsFinding(false);
+    if (result.error) {
+      setError(result.error.message);
+      return;
+    }
+    const match = result.data[0];
+    if (!match) {
+      setFindNotice('No one found with that ID — it has to match exactly.');
+      return;
+    }
+    const person: PickerPerson = {
+      userId: match.user_id,
+      displayName: match.display_name,
+      color: memberColor(match.user_id),
+      initials: initialsOf(match.display_name),
+      // An existing connection found by ID is just a connection; only a stranger gets the "+" (D061).
+      isNew: !match.is_connection,
+    };
+    if (person.isNew) {
+      setFoundPeople((prev) =>
+        prev.some((p) => p.userId === person.userId) ? prev : [person, ...prev],
+      );
+    }
+    setSelected((prev) =>
+      prev.some((p) => p.userId === person.userId) ? prev : [...prev, person],
+    );
+    setSearch('');
+  }, [search]);
+
+  const handleInviteSelected = useCallback(async () => {
+    if (!id || selected.length === 0) {
+      return;
+    }
+    setIsInviting(true);
+    setError(null);
+    let succeeded = 0;
+    for (const person of selected) {
+      const result = await invitePlayer({ target_group_id: id, target_user_id: person.userId });
+      if (result.error) {
+        setError(`${person.displayName.split(/\s+/)[0]}: ${result.error.message}`);
+        break;
+      }
+      succeeded += 1;
+    }
+    setIsInviting(false);
+    setSelected((prev) => prev.slice(succeeded));
+    setFoundPeople((prev) => prev.filter((p) => !selected.slice(0, succeeded).some((s) => s.userId === p.userId)));
+    setInvitedCount(succeeded > 0 ? succeeded : null);
+    refetch();
+  }, [id, selected, refetch]);
+
+  // One pre-written message carrying the typeable code and a tap-to-open link (D063); the link only pre-fills Join Group, never auto-joins (D064).
+  const handleShare = useCallback(async () => {
+    if (!detail) {
+      return;
+    }
+    const url = Linking.createURL('join-group', { queryParams: { code: detail.group.join_code } });
+    await Share.share({
+      message: `Join my Callout group “${detail.group.name}”! Use group code ${detail.group.join_code} in the app’s Join Group tab, or tap: ${url}`,
+    });
+  }, [detail]);
+
+  // The default list (D059): pinned new invitees first (with their "+"), then the full connections list, live-filtered by name as you type (D034). People already in the group stay visible but unselectable.
+  const filterQuery = search.trim().toLowerCase();
+  const connectionPeople: PickerPerson[] = (connections ?? []).map((c) => ({
+    userId: c.userId,
+    displayName: c.displayName,
+    color: c.color,
+    initials: c.initials,
+    isNew: false,
+  }));
+  const listPeople = [...foundPeople, ...connectionPeople].filter(
+    (p) => filterQuery.length === 0 || p.displayName.toLowerCase().includes(filterQuery),
+  );
 
   return (
     <ScrollView
@@ -154,120 +170,174 @@ export default function InvitePlayerScreen(): ReactElement {
         </View>
       </View>
 
-      {error !== null && (
+      {(error !== null || connectionsError !== null) && (
         <View style={styles.section}>
-          <ErrorBanner message={error} />
+          <ErrorBanner message={error ?? connectionsError ?? ''} />
         </View>
       )}
 
-      {/* Search: exact ID/email reaches everyone, names reach connections (D047/D034) */}
+      {/* Picker: search box above the default connections list (D059) */}
       <View style={styles.section}>
-        <Text style={styles.sectionLabel}>Find People</Text>
-        <View style={styles.searchWrap}>
-          <Svg width={16} height={16} viewBox="0 0 16 16" fill="none" style={styles.searchIcon}>
-            <Circle cx={7} cy={7} r={5} stroke={COLORS.textSecondary} strokeWidth={1.5} />
-            <Path
-              d="M11 11l3 3"
-              stroke={COLORS.textSecondary}
-              strokeWidth={1.5}
-              strokeLinecap="round"
-            />
-          </Svg>
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Exact Callout ID or email — or a connection’s name"
-            placeholderTextColor={COLORS.textMuted}
-            autoCapitalize="none"
-            autoCorrect={false}
-            style={styles.searchInput}
-          />
-        </View>
+        <Text style={styles.sectionLabel}>Add People</Text>
 
-        {query.length < MIN_SEARCH_LENGTH ? (
+        <View style={styles.searchRow}>
+          <View style={styles.searchWrap}>
+            <Svg width={16} height={16} viewBox="0 0 16 16" fill="none" style={styles.searchIcon}>
+              <Circle cx={7} cy={7} r={5} stroke={COLORS.textSecondary} strokeWidth={1.5} />
+              <Path
+                d="M11 11l3 3"
+                stroke={COLORS.textSecondary}
+                strokeWidth={1.5}
+                strokeLinecap="round"
+              />
+            </Svg>
+            <TextInput
+              value={search}
+              onChangeText={(text) => {
+                setSearch(text);
+                setFindNotice(null);
+              }}
+              placeholder="Filter connections, or enter a Callout ID"
+              placeholderTextColor={COLORS.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.searchInput}
+            />
+          </View>
+          <Pressable
+            onPress={handleFindById}
+            disabled={isFinding || search.trim().length === 0}
+            style={({ pressed }) => [styles.findButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.findButtonLabel}>{isFinding ? '…' : 'Find ID'}</Text>
+          </Pressable>
+        </View>
+        {findNotice !== null && <Text style={styles.findNotice}>{findNotice}</Text>}
+        <Text style={styles.searchHint}>
+          Typing filters your connections by name. To invite someone new, enter their full Callout
+          ID and tap Find ID.
+        </Text>
+
+        {/* Selection chips — new invitees keep their "+" (D061) */}
+        {selected.length > 0 && (
+          <View style={styles.chipRow}>
+            {selected.map((p) => (
+              <Pressable
+                key={p.userId}
+                onPress={() => toggle(p)}
+                style={[styles.chip, { backgroundColor: `${p.color}18`, borderColor: `${p.color}44` }]}
+              >
+                <Avatar initials={p.initials} color={p.color} size={20} />
+                <Text style={[styles.chipName, { color: p.color }]}>
+                  {p.isNew ? '+ ' : ''}
+                  {p.displayName.split(/\s+/)[0]}
+                </Text>
+                <Text style={[styles.chipRemove, { color: p.color }]}>×</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
+
+        {/* Default list: pinned finds, then connections (D059) */}
+        {connections === null ? (
+          <View style={styles.loadingWrap}>
+            <ActivityIndicator color={COLORS.ember} />
+          </View>
+        ) : listPeople.length === 0 ? (
           <Text style={styles.searchHint}>
-            A full Callout ID or exact email finds anyone on Callout. Names only search your own
-            connections.
-          </Text>
-        ) : isSearching ? (
-          <Text style={styles.searchHint}>Searching…</Text>
-        ) : results.length === 0 ? (
-          <Text style={styles.searchHint}>
-            No one found. IDs and emails must match exactly — or share the group with them below.
+            {connections.length === 0
+              ? 'No connections yet — find someone by their Callout ID above, or share the group code below.'
+              : `No connections match “${search.trim()}”.`}
           </Text>
         ) : (
-          <View style={styles.resultList}>
-            {results.map((row, i) => {
-              const color = memberColor(row.user_id);
-              const alreadyIn = memberIds.has(row.user_id);
-              const justInvited = invitedIds.includes(row.user_id);
+          <View style={styles.contactList}>
+            {listPeople.map((p, i) => {
+              const isSelected = selected.some((s) => s.userId === p.userId);
+              const alreadyIn = memberIds.has(p.userId);
               return (
-                <View
-                  key={row.user_id}
-                  style={[styles.resultRow, i < results.length - 1 && styles.resultRowDivider]}
+                <Pressable
+                  key={p.userId}
+                  onPress={alreadyIn ? undefined : () => toggle(p)}
+                  disabled={alreadyIn}
+                  style={[
+                    styles.contactRow,
+                    i < listPeople.length - 1 && styles.contactRowDivider,
+                    isSelected && { backgroundColor: `${p.color}10` },
+                    alreadyIn && styles.contactRowDisabled,
+                  ]}
                 >
-                  <Avatar initials={initialsOf(row.display_name)} color={color} size={38} />
-                  <View style={styles.resultInfo}>
-                    <Text style={styles.resultName}>{row.display_name}</Text>
-                    <Text style={styles.resultMeta}>
-                      {row.is_connection ? 'Connection' : `ID ${row.short_id}`}
+                  <Avatar initials={p.initials} color={p.color} size={38} ring={isSelected} />
+                  <View style={styles.contactInfo}>
+                    <Text style={styles.contactName}>
+                      {p.isNew ? '+ ' : ''}
+                      {p.displayName}
                     </Text>
+                    {p.isNew && <Text style={styles.contactMeta}>New invitee — not a connection yet</Text>}
                   </View>
-                  {alreadyIn || justInvited ? (
-                    <Text style={styles.invitedLabel}>{justInvited ? 'Invited ✓' : 'In group'}</Text>
+                  {alreadyIn ? (
+                    <Text style={styles.inGroupLabel}>In group</Text>
                   ) : (
-                    <Pressable
-                      onPress={() => handleInvite(row)}
-                      disabled={busyId !== null}
-                      style={({ pressed }) => [styles.inviteButton, pressed && styles.pressed]}
-                    >
-                      <Text style={styles.inviteButtonLabel}>
-                        {busyId === row.user_id ? 'Inviting…' : 'Invite'}
-                      </Text>
-                    </Pressable>
+                    isSelected && (
+                      <View style={[styles.checkCircle, { backgroundColor: p.color }]}>
+                        <Svg width={12} height={12} viewBox="0 0 12 12" fill="none">
+                          <Path
+                            d="M2 6l3 3 5-5"
+                            stroke={COLORS.white}
+                            strokeWidth={1.8}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </Svg>
+                      </View>
+                    )
                   )}
-                </View>
+                </Pressable>
               );
             })}
           </View>
         )}
+
+        {invitedCount !== null && selected.length === 0 && (
+          <Text style={styles.invitedNotice}>
+            {invitedCount === 1 ? 'Invite sent ✓' : `${invitedCount} invites sent ✓`}
+          </Text>
+        )}
+
+        {selected.length > 0 && (
+          <View style={styles.inviteButtonWrap}>
+            <GradientButton
+              label={
+                isInviting
+                  ? 'Inviting…'
+                  : `Invite ${selected.length} ${selected.length === 1 ? 'Person' : 'People'}`
+              }
+              onPress={handleInviteSelected}
+              disabled={isInviting}
+              variant="invite"
+            />
+          </View>
+        )}
       </View>
 
-      {/* Share the group (D052): personal single-use link, or the open join-code link */}
+      {/* Share the group — the join code, one mechanism (D063) */}
       <View style={styles.section}>
         <Text style={styles.sectionLabel}>Share the Group</Text>
         <View style={styles.shareCard}>
-          <SegmentedToggle
-            options={[
-              { id: 'single', label: 'One person' },
-              { id: 'open', label: 'Anyone with the link' },
-            ]}
-            activeId={shareMode}
-            onChange={(mode) => setShareMode(mode as ShareMode)}
-          />
+          <View style={styles.codeRow}>
+            <Text style={styles.codeLabel}>Group code</Text>
+            <Text style={styles.codeValue}>{detail?.group.join_code ?? '········'}</Text>
+          </View>
           <Text style={styles.shareBody}>
-            {shareMode === 'single'
-              ? 'A private link for one new-to-Callout friend: signing up through it puts them straight into this group and connects you two. Dead after first use.'
-              : 'Your group’s permanent code, shareable anywhere (like a group chat). Before the game starts people join instantly; after that, you approve each request.'}
+            Send it to one friend or a whole group chat. Before the game starts people join
+            instantly; after that, you approve each request. Removed members always need your
+            approval to come back.
           </Text>
-          {shareMode === 'open' && detail !== null && (
-            <View style={styles.codeRow}>
-              <Text style={styles.codeLabel}>Group code</Text>
-              <Text style={styles.codeValue}>{detail.group.join_code}</Text>
-            </View>
-          )}
           <Pressable
-            onPress={handleShareLink}
-            disabled={isSharing || detail === null}
+            onPress={handleShare}
+            disabled={detail === null}
             style={({ pressed }) => [styles.shareButton, pressed && styles.pressed]}
           >
-            <Text style={styles.shareButtonLabel}>
-              {isSharing
-                ? 'Creating link…'
-                : shareMode === 'single'
-                  ? 'Create & Share Private Link'
-                  : 'Share Group Link'}
-            </Text>
+            <Text style={styles.shareButtonLabel}>Share Code & Link</Text>
           </Pressable>
         </View>
       </View>
@@ -289,6 +359,37 @@ export default function InvitePlayerScreen(): ReactElement {
 }
 
 const styles = StyleSheet.create({
+  checkCircle: {
+    alignItems: 'center',
+    borderRadius: 11,
+    height: 22,
+    justifyContent: 'center',
+    width: 22,
+  },
+  chip: {
+    alignItems: 'center',
+    borderRadius: RADII.pill,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
+    paddingLeft: 6,
+    paddingRight: 10,
+    paddingVertical: 4,
+  },
+  chipName: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 12,
+  },
+  chipRemove: {
+    fontSize: 14,
+    opacity: 0.7,
+  },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
   codeLabel: {
     ...SECTION_LABEL,
     fontSize: 10,
@@ -299,7 +400,6 @@ const styles = StyleSheet.create({
     borderRadius: RADII.input,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 12,
     paddingHorizontal: 14,
     paddingVertical: 10,
   },
@@ -309,6 +409,41 @@ const styles = StyleSheet.create({
     fontSize: 16,
     letterSpacing: 3,
   },
+  contactInfo: {
+    flex: 1,
+  },
+  contactList: {
+    backgroundColor: COLORS.card,
+    borderColor: COLORS.border,
+    borderRadius: RADII.input,
+    borderWidth: 1,
+    overflow: 'hidden',
+  },
+  contactMeta: {
+    color: COLORS.invite,
+    fontFamily: FONTS.body,
+    fontSize: 11,
+    marginTop: 1,
+  },
+  contactName: {
+    color: COLORS.textPrimary,
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 14,
+  },
+  contactRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  contactRowDisabled: {
+    opacity: 0.55,
+  },
+  contactRowDivider: {
+    borderBottomColor: COLORS.divider,
+    borderBottomWidth: 1,
+  },
   continueHint: {
     color: COLORS.textMuted,
     fontFamily: FONTS.body,
@@ -316,6 +451,26 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: 12,
     textAlign: 'center',
+  },
+  findButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(123,97,255,0.15)',
+    borderColor: 'rgba(123,97,255,0.4)',
+    borderRadius: 14,
+    borderWidth: 1,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  findButtonLabel: {
+    color: COLORS.invite,
+    fontFamily: FONTS.display,
+    fontSize: 12,
+  },
+  findNotice: {
+    color: COLORS.warning,
+    fontFamily: FONTS.body,
+    fontSize: 12,
+    marginTop: 8,
   },
   flex: {
     backgroundColor: COLORS.background,
@@ -331,65 +486,34 @@ const styles = StyleSheet.create({
   headerText: {
     flex: 1,
   },
-  inviteButton: {
-    backgroundColor: 'rgba(123,97,255,0.15)',
-    borderColor: 'rgba(123,97,255,0.4)',
-    borderRadius: RADII.pill,
-    borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-  },
-  inviteButtonLabel: {
-    color: COLORS.invite,
-    fontFamily: FONTS.display,
+  inGroupLabel: {
+    color: COLORS.textMuted,
+    fontFamily: FONTS.bodySemiBold,
     fontSize: 12,
   },
-  invitedLabel: {
+  invitedNotice: {
     color: COLORS.success,
     fontFamily: FONTS.bodySemiBold,
     fontSize: 12,
+    marginTop: 10,
+    textAlign: 'center',
+  },
+  inviteButtonWrap: {
+    marginTop: 14,
+  },
+  loadingWrap: {
+    paddingVertical: 24,
   },
   pressed: {
     opacity: 0.8,
-  },
-  resultInfo: {
-    flex: 1,
-  },
-  resultList: {
-    backgroundColor: COLORS.card,
-    borderColor: COLORS.border,
-    borderRadius: RADII.input,
-    borderWidth: 1,
-    overflow: 'hidden',
-  },
-  resultMeta: {
-    color: COLORS.textMuted,
-    fontFamily: FONTS.body,
-    fontSize: 11,
-    marginTop: 1,
-  },
-  resultName: {
-    color: COLORS.textPrimary,
-    fontFamily: FONTS.bodySemiBold,
-    fontSize: 14,
-  },
-  resultRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  resultRowDivider: {
-    borderBottomColor: COLORS.divider,
-    borderBottomWidth: 1,
   },
   searchHint: {
     color: COLORS.textMuted,
     fontFamily: FONTS.body,
     fontSize: 12,
     lineHeight: 18,
-    paddingVertical: 8,
+    marginBottom: 12,
+    marginTop: 8,
   },
   searchIcon: {
     left: 14,
@@ -408,9 +532,13 @@ const styles = StyleSheet.create({
     paddingRight: 16,
     paddingVertical: 12,
   },
+  searchRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
   searchWrap: {
+    flex: 1,
     justifyContent: 'center',
-    marginBottom: 12,
   },
   section: {
     paddingBottom: 24,

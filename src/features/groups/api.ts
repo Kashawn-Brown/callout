@@ -2,18 +2,12 @@ import { callRpc } from '@/lib/rpc';
 import type {
   CallOutPlayerParams,
   CallOutPlayerResult,
-  ClaimShareInviteParams,
-  ClaimShareInviteResult,
   CreateGroupParams,
   CreateGroupResult,
-  CreateShareInviteParams,
-  CreateShareInviteResult,
   InvitePlayerParams,
   InvitePlayerResult,
   JoinGroupByCodeParams,
   JoinGroupByCodeResult,
-  PreviewShareInviteParams,
-  PreviewShareInviteResult,
   RemovePlayerParams,
   RemovePlayerResult,
   RespondJoinRequestParams,
@@ -69,24 +63,6 @@ export async function removePlayer(
   params: RemovePlayerParams,
 ): Promise<RpcResult<RemovePlayerResult>> {
   return callRpc<RemovePlayerResult>('remove_player', params);
-}
-
-export async function createShareInvite(
-  params: CreateShareInviteParams,
-): Promise<RpcResult<CreateShareInviteResult>> {
-  return callRpc<CreateShareInviteResult>('create_share_invite', params);
-}
-
-export async function previewShareInvite(
-  params: PreviewShareInviteParams,
-): Promise<RpcResult<PreviewShareInviteResult>> {
-  return callRpc<PreviewShareInviteResult>('preview_share_invite', params);
-}
-
-export async function claimShareInvite(
-  params: ClaimShareInviteParams,
-): Promise<RpcResult<ClaimShareInviteResult>> {
-  return callRpc<ClaimShareInviteResult>('claim_share_invite', params);
 }
 
 export async function joinGroupByCode(

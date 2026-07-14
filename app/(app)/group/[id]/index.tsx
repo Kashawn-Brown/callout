@@ -213,21 +213,6 @@ export default function GroupDetailScreen(): ReactElement {
           <Text style={styles.title}>{detail.group.name}</Text>
           <Text style={styles.subtitle}>{subtitle}</Text>
         </View>
-        {isHost && (
-          <IconButton
-            onPress={() => router.push(`/group/${detail.group.id}/invite`)}
-            accessibilityLabel="Invite a player"
-          >
-            <Svg width={16} height={16} viewBox="0 0 16 16" fill="none">
-              <Path
-                d="M8 3v10M3 8h10"
-                stroke={COLORS.textSecondary}
-                strokeWidth={2}
-                strokeLinecap="round"
-              />
-            </Svg>
-          </IconButton>
-        )}
       </View>
 
       {(error !== null || actionError !== null) && (
@@ -340,9 +325,27 @@ export default function GroupDetailScreen(): ReactElement {
         </View>
       )}
 
-      {/* Members grid */}
+      {/* Members grid — the host's add-people entry point lives on this row (label left, "+" right), matching the home screen's section-row pattern. */}
       <View style={styles.section}>
-        <Text style={styles.sectionLabel}>Members</Text>
+        <View style={styles.sectionRow}>
+          <Text style={[styles.sectionLabel, styles.sectionLabelInRow]}>Members</Text>
+          {isHost && (
+            <IconButton
+              onPress={() => router.push(`/group/${detail.group.id}/invite`)}
+              accessibilityLabel="Add people"
+              size={30}
+            >
+              <Svg width={14} height={14} viewBox="0 0 14 14" fill="none">
+                <Path
+                  d="M7 2.5v9M2.5 7h9"
+                  stroke={COLORS.textSecondary}
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                />
+              </Svg>
+            </IconButton>
+          )}
+        </View>
         <View style={styles.membersGrid}>
           {detail.members.map((m) => {
             const status = memberStatusThisRound(m.userId, detail.turnsThisRound);
@@ -807,6 +810,15 @@ const styles = StyleSheet.create({
   sectionLabel: {
     ...SECTION_LABEL,
     marginBottom: 12,
+  },
+  sectionLabelInRow: {
+    marginBottom: 0,
+  },
+  sectionRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
   },
   skipButton: {
     alignItems: 'center',

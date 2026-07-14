@@ -1,5 +1,4 @@
 import * as Clipboard from 'expo-clipboard';
-import * as Linking from 'expo-linking';
 import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
@@ -26,23 +25,15 @@ import {
 } from '@/features/auth/api';
 import { useSession } from '@/features/auth/SessionProvider';
 import { updateDisplayName, useProfile } from '@/features/auth/useProfile';
-import {
-  addConnection,
-  createConnectInvite,
-  removeConnection,
-  searchUsers,
-} from '@/features/connections/api';
+import { addConnection, findUserByShortId, removeConnection } from '@/features/connections/api';
 import { useConnections } from '@/features/connections/useConnections';
 import type { ConnectionView } from '@/features/connections/queries';
+import { APP_DOWNLOAD_URL } from '@/lib/app-links';
 import { initialsOf, memberColor } from '@/lib/format';
-import type { SearchUserRow } from '@/types/api';
+import type { FoundUserRow } from '@/types/api';
 import { COLORS, FONTS, RADII, SECTION_LABEL, SPACING } from '@/lib/theme';
 
 const DISPLAY_NAME_MAX_LENGTH = 50;
-/** Above this many connections the list gets a name filter — D034's connections-scoped search surface. */
-const FILTER_VISIBLE_THRESHOLD = 6;
-const MIN_SEARCH_LENGTH = 2;
-const SEARCH_DEBOUNCE_MS = 300;
 
 /** Profile & settings (D040): identity, sign-in methods (D041), and the connections list live here — deliberately not a top-level tab, since this is a low-frequency destination. */
 export default function ProfileScreen(): ReactElement {
@@ -59,38 +50,13 @@ export default function ProfileScreen(): ReactElement {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Add-connection search (D056): exact ID/email reaches anyone; results are tapped to add. Stored with the query they answer, like every debounced search in the app.
-  const [addInput, setAddInput] = useState('');
-  const [addSearchState, setAddSearchState] = useState<{
-    query: string;
-    rows: SearchUserRow[];
-  } | null>(null);
-  const [addBusyId, setAddBusyId] = useState<string | null>(null);
+  // One search box over the connections list (D059): typing live-filters by name (D034); a full Callout ID is looked up only on a deliberate tap (D061), surfacing the match with its "+" badge.
+  const [search, setSearch] = useState('');
+  const [foundUser, setFoundUser] = useState<FoundUserRow | null>(null);
+  const [findNotice, setFindNotice] = useState<string | null>(null);
+  const [isFinding, setIsFinding] = useState(false);
+  const [addBusy, setAddBusy] = useState(false);
   const [addNotice, setAddNotice] = useState<string | null>(null);
-  const [isSharingConnect, setIsSharingConnect] = useState(false);
-
-  // Connections name filter (D034)
-  const [filter, setFilter] = useState('');
-
-  useEffect(() => {
-    const query = addInput.trim();
-    if (query.length < MIN_SEARCH_LENGTH) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      searchUsers({ search_query: query }).then((result) => {
-        if (result.error) {
-          setError(result.error.message);
-        } else {
-          setError(null);
-          setAddSearchState({ query, rows: result.data });
-        }
-      });
-    }, SEARCH_DEBOUNCE_MS);
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [addInput]);
 
   const displayName = nameDraft ?? profile?.display_name ?? '';
   const nameDirty = nameDraft !== null && nameDraft.trim() !== (profile?.display_name ?? '');
@@ -131,32 +97,44 @@ export default function ProfileScreen(): ReactElement {
     };
   }, [copied]);
 
-  // D055/D057: the identity card's share action mints a single-use mutual connect link — when a friend signs up through it, both of you become connected at once. The raw Callout ID rides along for hand-typed adds.
-  const handleShareConnectLink = useCallback(async () => {
-    if (!profile) {
+  // D066: a plain, static app-download link — no token, no connection created. The Callout ID rides along so a friend who already has the app can add the sharer directly.
+  const handleShareApp = useCallback(async () => {
+    await Share.share({
+      message: `Come play Callout with me! Get the app here: ${APP_DOWNLOAD_URL}${profile ? ` — then add me with my Callout ID ${profile.short_id}.` : ''}`,
+    });
+  }, [profile]);
+
+  // Deliberate exact-ID lookup (D061): fires on tap, never as-you-type.
+  const handleFindById = useCallback(async () => {
+    const query = search.trim();
+    if (query.length === 0) {
       return;
     }
-    setIsSharingConnect(true);
+    setIsFinding(true);
     setError(null);
-    const result = await createConnectInvite();
-    setIsSharingConnect(false);
+    setFindNotice(null);
+    setFoundUser(null);
+    const result = await findUserByShortId({ short_id_code: query });
+    setIsFinding(false);
     if (result.error) {
       setError(result.error.message);
       return;
     }
-    const url = Linking.createURL('claim-invite', { queryParams: { token: result.data.token } });
-    await Share.share({
-      message: `Connect with me on Callout! Install the app, then open this link: ${url} — or add me by my Callout ID ${profile.short_id}. The link works exactly once.`,
-    });
-  }, [profile]);
+    const match = result.data[0] ?? null;
+    if (!match) {
+      setFindNotice('No one found with that ID — it has to match exactly.');
+      return;
+    }
+    setFoundUser(match);
+  }, [search]);
 
   const handleAddConnection = useCallback(
-    async (row: SearchUserRow) => {
-      setAddBusyId(row.user_id);
+    async (row: FoundUserRow) => {
+      setAddBusy(true);
       setAddNotice(null);
       setError(null);
       const result = await addConnection({ target_user_id: row.user_id });
-      setAddBusyId(null);
+      setAddBusy(false);
       if (result.error) {
         setError(result.error.message);
         return;
@@ -166,8 +144,8 @@ export default function ProfileScreen(): ReactElement {
           ? `You’re already connected with ${result.data.display_name}.`
           : `Connected with ${result.data.display_name} 🎉`,
       );
-      setAddInput('');
-      setAddSearchState(null);
+      setSearch('');
+      setFoundUser(null);
       refetchConnections();
     },
     [refetchConnections],
@@ -214,17 +192,11 @@ export default function ProfileScreen(): ReactElement {
     ]);
   }, []);
 
-  const filterQuery = filter.trim().toLowerCase();
+  // The default list is the full connections list, live-filtered by the search box (D059/D034).
+  const filterQuery = search.trim().toLowerCase();
   const visibleConnections = (connections ?? []).filter(
     (c) => filterQuery.length === 0 || c.displayName.toLowerCase().includes(filterQuery),
   );
-
-  const addQuery = addInput.trim();
-  const addResults =
-    addSearchState !== null && addSearchState.query === addQuery ? addSearchState.rows : [];
-  const isAddSearching =
-    addQuery.length >= MIN_SEARCH_LENGTH &&
-    (addSearchState === null || addSearchState.query !== addQuery);
 
   return (
     <ScrollView
@@ -272,32 +244,29 @@ export default function ProfileScreen(): ReactElement {
             )}
           </View>
 
+          {/* The name/ID/copy layout is the original card, untouched (D062); the share action lives on its own row below so it never disturbs this one. */}
           <View style={styles.shortIdRow}>
             <View>
               <Text style={styles.shortIdLabel}>Your Callout ID</Text>
               <Text style={styles.shortIdValue}>{profile?.short_id ?? '········'}</Text>
             </View>
-            {/* Copy and share sit together on the identity card (D057): copy hands out the ID, share mints the D055 mutual connect link. */}
-            <View style={styles.idActions}>
-              <Pressable
-                onPress={handleCopyId}
-                style={({ pressed }) => [styles.copyButton, pressed && styles.pressed]}
-              >
-                <Text style={styles.copyButtonLabel}>{copied ? 'Copied ✓' : 'Copy'}</Text>
-              </Pressable>
-              <Pressable
-                onPress={handleShareConnectLink}
-                disabled={isSharingConnect}
-                style={({ pressed }) => [styles.copyButton, pressed && styles.pressed]}
-              >
-                <Text style={styles.copyButtonLabel}>{isSharingConnect ? '…' : 'Share'}</Text>
-              </Pressable>
-            </View>
+            <Pressable
+              onPress={handleCopyId}
+              style={({ pressed }) => [styles.copyButton, pressed && styles.pressed]}
+            >
+              <Text style={styles.copyButtonLabel}>{copied ? 'Copied ✓' : 'Copy'}</Text>
+            </Pressable>
           </View>
           <Text style={styles.shortIdHint}>
-            Friends add you by this exact ID or your email — there’s no public search. Share sends
-            a one-time link that connects you both when they sign up.
+            Friends add you by this exact ID — there’s no public search.
           </Text>
+          {/* D066: a plain app-download link, nothing more — no token, no connection. */}
+          <Pressable
+            onPress={handleShareApp}
+            style={({ pressed }) => [styles.shareAppRow, pressed && styles.pressed]}
+          >
+            <Text style={styles.shareAppLabel}>Share Callout with a friend →</Text>
+          </Pressable>
         </View>
       </View>
 
@@ -311,60 +280,61 @@ export default function ProfileScreen(): ReactElement {
       <View style={styles.section}>
         <Text style={styles.sectionLabel}>Connections</Text>
 
-        <TextInput
-          value={addInput}
-          onChangeText={(text) => {
-            setAddInput(text);
-            setAddNotice(null);
-          }}
-          placeholder="Add by exact Callout ID or email…"
-          placeholderTextColor={COLORS.textMuted}
-          autoCapitalize="none"
-          autoCorrect={false}
-          style={styles.addInput}
-        />
-        {addQuery.length >= MIN_SEARCH_LENGTH &&
-          (isAddSearching ? (
-            <Text style={styles.addNotice}>Searching…</Text>
-          ) : addResults.length === 0 ? (
-            <Text style={styles.addEmpty}>
-              No exact match — IDs and emails must match exactly, and names only search people
-              you’re already connected with.
-            </Text>
-          ) : (
-            <View style={styles.addResultList}>
-              {addResults.map((row, i) => (
-                <View
-                  key={row.user_id}
-                  style={[styles.addResultRow, i < addResults.length - 1 && styles.addResultDivider]}
-                >
-                  <Avatar
-                    initials={initialsOf(row.display_name)}
-                    color={memberColor(row.user_id)}
-                    size={34}
-                  />
-                  <View style={styles.addResultInfo}>
-                    <Text style={styles.addResultName}>{row.display_name}</Text>
-                    <Text style={styles.addResultMeta}>ID {row.short_id}</Text>
-                  </View>
-                  {row.is_connection ? (
-                    <Text style={styles.addConnectedLabel}>Connected ✓</Text>
-                  ) : (
-                    <Pressable
-                      onPress={() => handleAddConnection(row)}
-                      disabled={addBusyId !== null}
-                      style={({ pressed }) => [styles.addButton, pressed && styles.pressed]}
-                    >
-                      <Text style={styles.addButtonLabel}>
-                        {addBusyId === row.user_id ? '…' : 'Add'}
-                      </Text>
-                    </Pressable>
-                  )}
-                </View>
-              ))}
-            </View>
-          ))}
+        {/* Search box above the default list (D059): typing filters connections by name; Find ID is the deliberate exact-lookup action (D061). */}
+        <View style={styles.searchRow}>
+          <TextInput
+            value={search}
+            onChangeText={(text) => {
+              setSearch(text);
+              setAddNotice(null);
+              setFindNotice(null);
+              setFoundUser(null);
+            }}
+            placeholder="Filter connections, or enter a Callout ID"
+            placeholderTextColor={COLORS.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            style={styles.addInput}
+          />
+          <Pressable
+            onPress={handleFindById}
+            disabled={isFinding || search.trim().length === 0}
+            style={({ pressed }) => [styles.findButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.findButtonLabel}>{isFinding ? '…' : 'Find ID'}</Text>
+          </Pressable>
+        </View>
+        {findNotice !== null && <Text style={styles.findNotice}>{findNotice}</Text>}
         {addNotice !== null && <Text style={styles.addNotice}>{addNotice}</Text>}
+
+        {/* A found match renders like a connection row but wears the "+" new-person badge (D061); tapping Add connects instantly (D033). */}
+        {foundUser !== null && (
+          <View style={styles.foundRow}>
+            <Avatar
+              initials={initialsOf(foundUser.display_name)}
+              color={memberColor(foundUser.user_id)}
+              size={38}
+            />
+            <View style={styles.foundInfo}>
+              <Text style={styles.foundName}>
+                {foundUser.is_connection ? '' : '+ '}
+                {foundUser.display_name}
+              </Text>
+              <Text style={styles.foundMeta}>ID {foundUser.short_id}</Text>
+            </View>
+            {foundUser.is_connection ? (
+              <Text style={styles.foundConnectedLabel}>Connected ✓</Text>
+            ) : (
+              <Pressable
+                onPress={() => handleAddConnection(foundUser)}
+                disabled={addBusy}
+                style={({ pressed }) => [styles.addButton, pressed && styles.pressed]}
+              >
+                <Text style={styles.addButtonLabel}>{addBusy ? '…' : 'Add'}</Text>
+              </Pressable>
+            )}
+          </View>
+        )}
 
         {connections === null ? (
           <View style={styles.loadingWrap}>
@@ -372,48 +342,35 @@ export default function ProfileScreen(): ReactElement {
           </View>
         ) : connections.length === 0 ? (
           <Text style={styles.emptyText}>
-            No connections yet. Add someone by their ID or email, or join a group — groupmates
-            connect automatically.
+            No connections yet. Find someone by their Callout ID above, or join a group —
+            groupmates connect automatically.
           </Text>
         ) : (
-          <>
-            {connections.length >= FILTER_VISIBLE_THRESHOLD && (
-              <TextInput
-                value={filter}
-                onChangeText={setFilter}
-                placeholder="Search your connections…"
-                placeholderTextColor={COLORS.textMuted}
-                autoCapitalize="none"
-                style={styles.filterInput}
-              />
-            )}
-            <View style={styles.connectionList}>
-              {visibleConnections.map((c, i) => (
-                <View
-                  key={c.userId}
-                  style={[
-                    styles.connectionRow,
-                    i < visibleConnections.length - 1 && styles.connectionRowDivider,
-                  ]}
+          <View style={styles.connectionList}>
+            {visibleConnections.map((c, i) => (
+              <View
+                key={c.userId}
+                style={[
+                  styles.connectionRow,
+                  i < visibleConnections.length - 1 && styles.connectionRowDivider,
+                ]}
+              >
+                <Avatar initials={c.initials} color={c.color} size={38} />
+                <Text style={styles.connectionName}>{c.displayName}</Text>
+                <Pressable
+                  onPress={() => handleRemoveConnection(c)}
+                  accessibilityLabel={`Remove ${c.displayName}`}
+                  style={({ pressed }) => [styles.removeButton, pressed && styles.pressed]}
                 >
-                  <Avatar initials={c.initials} color={c.color} size={38} />
-                  <Text style={styles.connectionName}>{c.displayName}</Text>
-                  <Pressable
-                    onPress={() => handleRemoveConnection(c)}
-                    accessibilityLabel={`Remove ${c.displayName}`}
-                    style={({ pressed }) => [styles.removeButton, pressed && styles.pressed]}
-                  >
-                    <Text style={styles.removeButtonLabel}>×</Text>
-                  </Pressable>
-                </View>
-              ))}
-              {visibleConnections.length === 0 && (
-                <Text style={styles.emptyFilterText}>No connections match “{filter.trim()}”.</Text>
-              )}
-            </View>
-          </>
+                  <Text style={styles.removeButtonLabel}>×</Text>
+                </Pressable>
+              </View>
+            ))}
+            {visibleConnections.length === 0 && (
+              <Text style={styles.emptyFilterText}>No connections match “{search.trim()}”.</Text>
+            )}
+          </View>
         )}
-
       </View>
 
       {/* Sign out */}
@@ -621,24 +578,13 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.display,
     fontSize: 12,
   },
-  addConnectedLabel: {
-    color: COLORS.success,
-    fontFamily: FONTS.bodySemiBold,
-    fontSize: 12,
-  },
-  addEmpty: {
-    color: COLORS.textMuted,
-    fontFamily: FONTS.body,
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: 8,
-  },
   addInput: {
     backgroundColor: COLORS.card,
     borderColor: COLORS.border,
     borderRadius: 14,
     borderWidth: 1.5,
     color: COLORS.textPrimary,
+    flex: 1,
     fontFamily: FONTS.body,
     fontSize: 14,
     paddingHorizontal: 14,
@@ -649,39 +595,6 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.body,
     fontSize: 12,
     marginTop: 8,
-  },
-  addResultDivider: {
-    borderBottomColor: COLORS.divider,
-    borderBottomWidth: 1,
-  },
-  addResultInfo: {
-    flex: 1,
-  },
-  addResultList: {
-    backgroundColor: COLORS.card,
-    borderColor: COLORS.border,
-    borderRadius: RADII.input,
-    borderWidth: 1,
-    marginTop: 10,
-    overflow: 'hidden',
-  },
-  addResultMeta: {
-    color: COLORS.textMuted,
-    fontFamily: FONTS.body,
-    fontSize: 11,
-    marginTop: 1,
-  },
-  addResultName: {
-    color: COLORS.textPrimary,
-    fontFamily: FONTS.bodySemiBold,
-    fontSize: 13,
-  },
-  addResultRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
   },
   connectionList: {
     backgroundColor: COLORS.card,
@@ -732,21 +645,60 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     marginTop: 12,
   },
-  filterInput: {
-    backgroundColor: COLORS.card,
-    borderColor: COLORS.border,
+  findButton: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(123,97,255,0.15)',
+    borderColor: 'rgba(123,97,255,0.4)',
     borderRadius: 14,
     borderWidth: 1,
-    color: COLORS.textPrimary,
-    fontFamily: FONTS.body,
-    fontSize: 13,
-    marginTop: 12,
+    justifyContent: 'center',
     paddingHorizontal: 14,
-    paddingVertical: 10,
+  },
+  findButtonLabel: {
+    color: COLORS.invite,
+    fontFamily: FONTS.display,
+    fontSize: 12,
+  },
+  findNotice: {
+    color: COLORS.warning,
+    fontFamily: FONTS.body,
+    fontSize: 12,
+    marginTop: 8,
   },
   flex: {
     backgroundColor: COLORS.background,
     flex: 1,
+  },
+  foundConnectedLabel: {
+    color: COLORS.success,
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 12,
+  },
+  foundInfo: {
+    flex: 1,
+  },
+  foundMeta: {
+    color: COLORS.textMuted,
+    fontFamily: FONTS.body,
+    fontSize: 11,
+    marginTop: 1,
+  },
+  foundName: {
+    color: COLORS.textPrimary,
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 14,
+  },
+  foundRow: {
+    alignItems: 'center',
+    backgroundColor: COLORS.card,
+    borderColor: 'rgba(123,97,255,0.35)',
+    borderRadius: RADII.input,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
   },
   header: {
     alignItems: 'center',
@@ -754,10 +706,6 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingBottom: 24,
     paddingHorizontal: SPACING.contentX,
-  },
-  idActions: {
-    flexDirection: 'row',
-    gap: 8,
   },
   identityCard: {
     alignItems: 'center',
@@ -892,6 +840,19 @@ const styles = StyleSheet.create({
   sectionLabel: {
     ...SECTION_LABEL,
     marginBottom: 8,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  shareAppLabel: {
+    color: COLORS.textSecondary,
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 12,
+  },
+  shareAppRow: {
+    marginTop: 12,
+    paddingVertical: 4,
   },
   shortIdHint: {
     color: COLORS.textMuted,

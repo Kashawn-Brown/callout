@@ -11,7 +11,7 @@ import { ErrorBanner } from '@/components/ErrorBanner';
 import { IconButton } from '@/components/IconButton';
 import { useProfile } from '@/features/auth/useProfile';
 import { useSession } from '@/features/auth/SessionProvider';
-import { takePendingInvite } from '@/features/connections/pending-invite';
+import { takePendingJoinCode } from '@/features/connections/pending-invite';
 import type { GroupSummary, PendingInvite } from '@/features/groups/queries';
 import { useCountdown } from '@/features/groups/useCountdown';
 import { useHomeData } from '@/features/groups/useHomeData';
@@ -37,18 +37,13 @@ export default function HomeScreen(): ReactElement {
     router.push('/profile');
   }, [router]);
 
-  // An invite stashed before auth (deep link while signed out, or a code typed at sign-up) resumes the moment the signed-in home appears: share tokens go to the claim screen (D036/D055), join codes to the Join Group flow (D051/D052).
+  // A join code stashed before auth (share link while signed out, or a code typed at sign-up) resumes the moment the signed-in home appears, opening Join Group pre-filled — never auto-submitted (D063/D064).
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
-      void takePendingInvite().then((invite) => {
-        if (!invite || cancelled) {
-          return;
-        }
-        if (invite.kind === 'token') {
-          router.push(`/claim-invite?token=${invite.value}`);
-        } else {
-          router.push(`/join-group?code=${invite.value}`);
+      void takePendingJoinCode().then((code) => {
+        if (code && !cancelled) {
+          router.push(`/join-group?code=${code}`);
         }
       });
       return () => {
@@ -71,28 +66,14 @@ export default function HomeScreen(): ReactElement {
               Hey {profile?.display_name.split(/\s+/)[0] ?? 'there'} 👋
             </Text>
           </View>
-          <View style={styles.headerActions}>
-            <IconButton
-              onPress={() => router.push('/create-group')}
-              accessibilityLabel="Create a new group"
-            >
-              <Svg width={16} height={16} viewBox="0 0 16 16" fill="none">
-                <Path
-                  d="M8 3v10M3 8h10"
-                  stroke={COLORS.textSecondary}
-                  strokeWidth={2}
-                  strokeLinecap="round"
-                />
-              </Svg>
-            </IconButton>
-            <Pressable onPress={handleAvatarPress} accessibilityLabel="Profile and settings">
-              <Avatar
-                initials={profile ? initialsOf(profile.display_name) : '?'}
-                color={userId ? memberColor(userId) : COLORS.invite}
-                size={36}
-              />
-            </Pressable>
-          </View>
+          {/* Creation entry points live on the section row below and the bottom nav — the header keeps only the profile avatar. */}
+          <Pressable onPress={handleAvatarPress} accessibilityLabel="Profile and settings">
+            <Avatar
+              initials={profile ? initialsOf(profile.display_name) : '?'}
+              color={userId ? memberColor(userId) : COLORS.invite}
+              size={36}
+            />
+          </Pressable>
         </View>
 
         {error !== null && (
@@ -115,9 +96,25 @@ export default function HomeScreen(): ReactElement {
         {/* Other groups */}
         {otherGroups.length > 0 && (
           <>
-            <Text style={styles.sectionLabel}>
-              {myTurnGroups.length > 0 ? 'Other Groups' : 'Your Groups'}
-            </Text>
+            <View style={styles.sectionRow}>
+              <Text style={styles.sectionLabel}>
+                {myTurnGroups.length > 0 ? 'Other Groups' : 'Your Groups'}
+              </Text>
+              <IconButton
+                onPress={() => router.push('/create-group')}
+                accessibilityLabel="Create a new group"
+                size={30}
+              >
+                <Svg width={14} height={14} viewBox="0 0 14 14" fill="none">
+                  <Path
+                    d="M7 2.5v9M2.5 7h9"
+                    stroke={COLORS.textSecondary}
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                  />
+                </Svg>
+              </IconButton>
+            </View>
             <View style={styles.groupList}>
               {otherGroups.map((summary) => (
                 <GroupCard key={summary.group.id} summary={summary} />
@@ -406,11 +403,6 @@ const styles = StyleSheet.create({
     paddingBottom: 20,
     paddingHorizontal: 24,
   },
-  headerActions: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 10,
-  },
   hero: {
     borderRadius: RADII.hero,
     overflow: 'hidden',
@@ -509,6 +501,11 @@ const styles = StyleSheet.create({
   },
   sectionLabel: {
     ...SECTION_LABEL,
+  },
+  sectionRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     paddingBottom: 12,
     paddingHorizontal: 24,
     paddingTop: 4,

@@ -16,7 +16,7 @@ import { StatusBar } from 'expo-status-bar';
 import { useEffect, type ReactElement } from 'react';
 
 import { SessionProvider, useSession } from '@/features/auth/SessionProvider';
-import { pendingInviteFromUrl, stashPendingInvite } from '@/features/connections/pending-invite';
+import { joinCodeFromUrl, stashPendingJoinCode } from '@/features/connections/pending-invite';
 import { COLORS } from '@/lib/theme';
 
 // Keep the native splash visible until fonts and the persisted session are both ready, so cold start never flashes the wrong route group or unstyled text.
@@ -34,14 +34,14 @@ function RootNavigator(): ReactElement | null {
   const { session, isLoading } = useSession();
   const url = useLinkingURL();
 
-  // Invite deep links (D052/D053): signed in, expo-router routes straight to /claim-invite or /join-group. Signed out, the route guard would drop the URL on the way to sign-in — so the invite is stashed here and the home screen resumes it right after auth.
+  // Group share links (D063/D053): signed in, expo-router routes straight to /join-group with the code pre-filled (D064). Signed out, the route guard would drop the URL on the way to sign-in — so the code is stashed here and the home screen resumes it right after auth.
   useEffect(() => {
     if (!url || session !== null) {
       return;
     }
-    const invite = pendingInviteFromUrl(url);
-    if (invite) {
-      void stashPendingInvite(invite);
+    const code = joinCodeFromUrl(url);
+    if (code) {
+      void stashPendingJoinCode(code);
     }
   }, [url, session]);
 

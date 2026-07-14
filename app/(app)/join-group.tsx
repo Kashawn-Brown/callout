@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
+import { useCallback, useState, type ReactElement } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -11,7 +11,7 @@ import { joinGroupByCode } from '@/features/groups/api';
 import { COLORS, FONTS, RADII, SPACING } from '@/lib/theme';
 import type { JoinGroupByCodeResult } from '@/types/api';
 
-/** Join a group by its persistent code (D050/D051): instant entry while the group is in setup, a host-approved request once it has started. Reached from the bottom nav, or by an open share link with ?code= (D052). */
+/** Join a group by its persistent code (D050/D051/D063): instant entry while the group is in setup, a host-approved request once it has started. Reached from the bottom nav, or by a share link with ?code= — which only pre-fills; joining always takes one explicit tap (D064). */
 export default function JoinGroupScreen(): ReactElement {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -21,7 +21,6 @@ export default function JoinGroupScreen(): ReactElement {
   const [outcome, setOutcome] = useState<JoinGroupByCodeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isJoining, setIsJoining] = useState(false);
-  const autoSubmitted = useRef(false);
 
   const handleJoin = useCallback(
     async (raw: string) => {
@@ -43,13 +42,25 @@ export default function JoinGroupScreen(): ReactElement {
     [],
   );
 
-  // An open share link lands here with the code already in the URL (D052/D053): submit it once without requiring a retype.
-  useEffect(() => {
-    if (codeParam && !autoSubmitted.current) {
-      autoSubmitted.current = true;
-      void handleJoin(codeParam);
-    }
-  }, [codeParam, handleJoin]);
+  // Already an active member (D065): information, not an error — one tap opens the group.
+  if (outcome !== null && outcome.status === 'already_member') {
+    return (
+      <View style={[styles.flex, styles.resultWrap, { paddingTop: insets.top }]}>
+        <Text style={styles.resultEmoji}>😄</Text>
+        <Text style={styles.resultTitle}>You’re already in this group</Text>
+        <Text style={styles.resultSub}>
+          That code belongs to {outcome.group_name} — and you’re already a member.
+        </Text>
+        <View style={styles.resultButtonWrap}>
+          <GradientButton
+            label="Open Group →"
+            onPress={() => router.dismissTo(`/group/${outcome.group_id}`)}
+            variant="invite"
+          />
+        </View>
+      </View>
+    );
+  }
 
   if (outcome !== null && outcome.status === 'joined') {
     return (

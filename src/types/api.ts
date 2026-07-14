@@ -8,18 +8,17 @@ export type RpcError = {
 
 export type RpcResult<T> = { data: T; error: null } | { data: null; error: RpcError };
 
-export type SearchUsersParams = {
-  search_query: string;
+export type FindUserByShortIdParams = {
+  short_id_code: string;
 };
 
-/** One search hit (D047/D056): exact ID/email matches come from the whole user base, name matches only from the caller's connections (D034). */
-export type SearchUserRow = {
+/** The exact-ID lookup result (D056/D060/D061): zero or one row, the only global search key. is_connection tells pickers whether to show the "+" new-invitee badge. */
+export type FoundUserRow = {
   user_id: string;
   display_name: string;
   avatar_url: string | null;
   short_id: string;
   is_connection: boolean;
-  exact_match: boolean;
 };
 
 export type AddConnectionParams = {
@@ -41,41 +40,13 @@ export type RemoveConnectionResult = {
   status: 'removed';
 };
 
-export type CreateShareInviteParams = {
-  target_group_id: string;
-};
-
-/** Shared by create_share_invite (group tokens) and create_connect_invite (profile connect links, D055). */
-export type CreateShareInviteResult = {
-  share_invite_id: string;
-  token: string;
-};
-
-export type PreviewShareInviteParams = {
-  invite_token: string;
-};
-
-export type PreviewShareInviteResult = {
-  /** 'group' = personal group invite (D036); 'connect' = profile connect link with no group (D055). */
-  kind: 'group' | 'connect';
-  group_id?: string;
-  group_name?: string;
-  inviter_name: string | null;
-  member_count?: number;
-  status: 'valid' | 'used';
-};
-
-export type ClaimShareInviteParams = {
-  invite_token: string;
-};
-
 export type JoinGroupByCodeParams = {
   code: string;
 };
 
 export type JoinGroupByCodeResult = RoundOpenedFields & {
-  /** 'joined' pre-start (instant, D051); 'request_pending' once the group has started. */
-  status: 'joined' | 'request_pending';
+  /** 'joined' pre-start (instant, D051); 'request_pending' once the group has started; 'already_member' is informational, never an error (D065). */
+  status: 'joined' | 'request_pending' | 'already_member';
   group_id: string;
   group_name: string;
 };
@@ -125,12 +96,6 @@ export type RoundOpenedFields = {
 
 export type RespondToInviteResult = RoundOpenedFields & {
   status: 'joined' | 'declined';
-};
-
-export type ClaimShareInviteResult = RoundOpenedFields & {
-  /** 'joined' for group tokens; 'connected' for profile connect links (D055). */
-  status: 'joined' | 'connected';
-  group_id?: string | null;
 };
 
 export type StartGameParams = {
