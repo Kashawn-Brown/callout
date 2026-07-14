@@ -17,10 +17,7 @@ import { GradientButton } from '@/components/GradientButton';
 import { SegmentedToggle } from '@/components/SegmentedToggle';
 import { signUpWithEmail, signUpWithPhone } from '@/features/auth/api';
 import { PhoneOtpForm } from '@/features/auth/PhoneOtpForm';
-import {
-  normalizeInviteToken,
-  stashPendingInviteToken,
-} from '@/features/connections/pending-invite';
+import { classifyInviteInput, stashPendingInvite } from '@/features/connections/pending-invite';
 import { COLORS, FONTS, SPACING } from '@/lib/theme';
 
 // Mirrors the profile.display_name check constraint (1–50 chars) so validation fails in the form, not in the database trigger.
@@ -51,18 +48,18 @@ export default function SignUpScreen(): ReactElement {
   const displayNameMissing =
     displayName.trim().length === 0 || displayName.trim().length > DISPLAY_NAME_MAX_LENGTH;
 
-  // Stashes a typed invite code (D036) so the home screen claims it right after the session exists; returns false when the code is present but malformed.
+  // Stashes a typed invite (a 16-character share token or an 8-character group code — D052's two shapes) so the home screen resumes it right after the session exists; returns false when input is present but malformed.
   const stashInviteIfPresent = useCallback(async (): Promise<boolean> => {
     const raw = inviteCode.trim();
     if (raw.length === 0) {
       return true;
     }
-    const token = normalizeInviteToken(raw);
-    if (!token) {
-      setError('That invite code doesn’t look right — it’s 16 letters and numbers.');
+    const invite = classifyInviteInput(raw);
+    if (!invite) {
+      setError('That code doesn’t look right — invite links use 16 characters, group codes use 8.');
       return false;
     }
-    await stashPendingInviteToken(token);
+    await stashPendingInvite(invite);
     return true;
   }, [inviteCode]);
 
@@ -175,10 +172,10 @@ export default function SignUpScreen(): ReactElement {
 
           {showInviteField ? (
             <FormField
-              label="Invite Code"
+              label="Invite or Group Code"
               value={inviteCode}
               onChangeText={setInviteCode}
-              placeholder="16-character code from a friend"
+              placeholder="Code from a friend or a group"
               autoCapitalize="characters"
               autoCorrect={false}
             />

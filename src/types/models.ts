@@ -32,6 +32,15 @@ export type Group = {
   status: GroupStatus;
   /** Postgres interval serialized as text (e.g. "01:00:00" or "1 day"); parse with parseIntervalToMinutes. */
   per_turn_deadline: string;
+  /** Persistent join code (D050): instant entry pre-start, host-approved request once started (D051). Server-generated, never regenerates in MVP. */
+  join_code: string;
+  created_at: string;
+};
+
+export type JoinRequest = {
+  id: string;
+  group_id: string;
+  user_id: string;
   created_at: string;
 };
 

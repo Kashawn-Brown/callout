@@ -11,7 +11,7 @@ import { ErrorBanner } from '@/components/ErrorBanner';
 import { IconButton } from '@/components/IconButton';
 import { useProfile } from '@/features/auth/useProfile';
 import { useSession } from '@/features/auth/SessionProvider';
-import { takePendingInviteToken } from '@/features/connections/pending-invite';
+import { takePendingInvite } from '@/features/connections/pending-invite';
 import type { GroupSummary, PendingInvite } from '@/features/groups/queries';
 import { useCountdown } from '@/features/groups/useCountdown';
 import { useHomeData } from '@/features/groups/useHomeData';
@@ -37,13 +37,18 @@ export default function HomeScreen(): ReactElement {
     router.push('/profile');
   }, [router]);
 
-  // A share-invite token stashed before auth (deep link while signed out, or a code typed at sign-up) is claimed the moment the signed-in home appears (D036).
+  // An invite stashed before auth (deep link while signed out, or a code typed at sign-up) resumes the moment the signed-in home appears: share tokens go to the claim screen (D036/D055), join codes to the Join Group flow (D051/D052).
   useFocusEffect(
     useCallback(() => {
       let cancelled = false;
-      void takePendingInviteToken().then((token) => {
-        if (token && !cancelled) {
-          router.push(`/claim-invite?token=${token}`);
+      void takePendingInvite().then((invite) => {
+        if (!invite || cancelled) {
+          return;
+        }
+        if (invite.kind === 'token') {
+          router.push(`/claim-invite?token=${invite.value}`);
+        } else {
+          router.push(`/join-group?code=${invite.value}`);
         }
       });
       return () => {

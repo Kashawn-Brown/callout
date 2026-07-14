@@ -8,24 +8,29 @@ export type RpcError = {
 
 export type RpcResult<T> = { data: T; error: null } | { data: null; error: RpcError };
 
-export type AddConnectionByShortIdParams = {
-  short_id_code: string;
+export type SearchUsersParams = {
+  search_query: string;
 };
 
-export type AddConnectionByShortIdResult = {
+/** One search hit (D047/D056): exact ID/email matches come from the whole user base, name matches only from the caller's connections (D034). */
+export type SearchUserRow = {
+  user_id: string;
+  display_name: string;
+  avatar_url: string | null;
+  short_id: string;
+  is_connection: boolean;
+  exact_match: boolean;
+};
+
+export type AddConnectionParams = {
+  target_user_id: string;
+};
+
+export type AddConnectionResult = {
   user_id: string;
   display_name: string;
   avatar_url: string | null;
   already_connected: boolean;
-};
-
-export type AddConnectionByEmailParams = {
-  email_address: string;
-};
-
-/** Deliberately content-free (D033): the response is identical whether or not the email matched an account, so account existence can never be probed through this call. */
-export type AddConnectionByEmailResult = {
-  status: 'processed';
 };
 
 export type RemoveConnectionParams = {
@@ -40,6 +45,7 @@ export type CreateShareInviteParams = {
   target_group_id: string;
 };
 
+/** Shared by create_share_invite (group tokens) and create_connect_invite (profile connect links, D055). */
 export type CreateShareInviteResult = {
   share_invite_id: string;
   token: string;
@@ -50,10 +56,12 @@ export type PreviewShareInviteParams = {
 };
 
 export type PreviewShareInviteResult = {
-  group_id: string;
-  group_name: string;
+  /** 'group' = personal group invite (D036); 'connect' = profile connect link with no group (D055). */
+  kind: 'group' | 'connect';
+  group_id?: string;
+  group_name?: string;
   inviter_name: string | null;
-  member_count: number;
+  member_count?: number;
   status: 'valid' | 'used';
 };
 
@@ -61,14 +69,36 @@ export type ClaimShareInviteParams = {
   invite_token: string;
 };
 
+export type JoinGroupByCodeParams = {
+  code: string;
+};
+
+export type JoinGroupByCodeResult = RoundOpenedFields & {
+  /** 'joined' pre-start (instant, D051); 'request_pending' once the group has started. */
+  status: 'joined' | 'request_pending';
+  group_id: string;
+  group_name: string;
+};
+
+export type RespondJoinRequestParams = {
+  target_group_id: string;
+  target_user_id: string;
+  approve: boolean;
+};
+
+export type RespondJoinRequestResult = RoundOpenedFields & {
+  status: 'approved' | 'declined';
+};
+
+/** Settings only (D049): people are added in step two via invite_player, never at creation. */
 export type CreateGroupParams = {
   group_name: string;
   deadline_minutes: number;
-  invitee_ids: string[];
 };
 
 export type CreateGroupResult = {
   group_id: string;
+  join_code: string;
 };
 
 export type InvitePlayerParams = {
@@ -98,8 +128,9 @@ export type RespondToInviteResult = RoundOpenedFields & {
 };
 
 export type ClaimShareInviteResult = RoundOpenedFields & {
-  status: 'joined';
-  group_id: string;
+  /** 'joined' for group tokens; 'connected' for profile connect links (D055). */
+  status: 'joined' | 'connected';
+  group_id?: string | null;
 };
 
 export type StartGameParams = {

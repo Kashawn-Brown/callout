@@ -10,10 +10,14 @@ import type {
   CreateShareInviteResult,
   InvitePlayerParams,
   InvitePlayerResult,
+  JoinGroupByCodeParams,
+  JoinGroupByCodeResult,
   PreviewShareInviteParams,
   PreviewShareInviteResult,
   RemovePlayerParams,
   RemovePlayerResult,
+  RespondJoinRequestParams,
+  RespondJoinRequestResult,
   RespondToInviteParams,
   RespondToInviteResult,
   RpcResult,
@@ -83,4 +87,16 @@ export async function claimShareInvite(
   params: ClaimShareInviteParams,
 ): Promise<RpcResult<ClaimShareInviteResult>> {
   return callRpc<ClaimShareInviteResult>('claim_share_invite', params);
+}
+
+export async function joinGroupByCode(
+  params: JoinGroupByCodeParams,
+): Promise<RpcResult<JoinGroupByCodeResult>> {
+  return callRpc<JoinGroupByCodeResult>('join_group_by_code', params);
+}
+
+export async function respondJoinRequest(
+  params: RespondJoinRequestParams,
+): Promise<RpcResult<RespondJoinRequestResult>> {
+  return callRpc<RespondJoinRequestResult>('respond_join_request', params);
 }

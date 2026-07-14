@@ -19,8 +19,8 @@ import { CountdownRing } from '@/components/CountdownRing';
 import { ErrorBanner } from '@/components/ErrorBanner';
 import { IconButton } from '@/components/IconButton';
 import { useSession } from '@/features/auth/SessionProvider';
-import { removePlayer, skipTurn, startGame } from '@/features/groups/api';
-import type { GroupDetail, MemberView } from '@/features/groups/queries';
+import { removePlayer, respondJoinRequest, skipTurn, startGame } from '@/features/groups/api';
+import type { GroupDetail, JoinRequestView, MemberView } from '@/features/groups/queries';
 import { useCountdown } from '@/features/groups/useCountdown';
 import { useGroupDetail } from '@/features/groups/useGroupDetail';
 import { deadlineLabel, parseIntervalToMinutes, timeAgoLabel } from '@/lib/format';
@@ -118,6 +118,29 @@ export default function GroupDetailScreen(): ReactElement {
       ],
     );
   }, [detail, refetch]);
+
+  // Approve or decline a join-by-code request (D051). Decline is deliberately quiet — the requester can always ask again with the same code.
+  const handleRespondRequest = useCallback(
+    async (request: JoinRequestView, approve: boolean) => {
+      if (!detail) {
+        return;
+      }
+      setIsActing(true);
+      setActionError(null);
+      const result = await respondJoinRequest({
+        target_group_id: detail.group.id,
+        target_user_id: request.userId,
+        approve,
+      });
+      setIsActing(false);
+      if (result.error) {
+        setActionError(result.error.message);
+      } else {
+        refetch();
+      }
+    },
+    [detail, refetch],
+  );
 
   const handleRemoveMember = useCallback(
     (member: MemberView) => {
@@ -280,6 +303,41 @@ export default function GroupDetailScreen(): ReactElement {
           windowMinutes={windowMinutes}
           onSkip={handleSkipTurn}
         />
+      )}
+
+      {/* Pending join requests (D051) — host approves or declines */}
+      {isHost && detail.joinRequests.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>Join Requests</Text>
+          {detail.joinRequests.map((request, i) => (
+            <View
+              key={request.userId}
+              style={[styles.requestRow, i < detail.joinRequests.length - 1 && styles.requestRowGap]}
+            >
+              <Avatar initials={request.initials} color={request.color} size={38} />
+              <View style={styles.requestInfo}>
+                <Text style={styles.requestName}>{request.displayName}</Text>
+                <Text style={styles.requestMeta}>Wants to join via the group code</Text>
+              </View>
+              <Pressable
+                onPress={() => handleRespondRequest(request, false)}
+                disabled={isActing}
+                accessibilityLabel={`Decline ${request.displayName}`}
+                style={({ pressed }) => [styles.requestDecline, pressed && styles.pressed]}
+              >
+                <Text style={styles.requestDeclineLabel}>✕</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => handleRespondRequest(request, true)}
+                disabled={isActing}
+                accessibilityLabel={`Approve ${request.displayName}`}
+                style={({ pressed }) => [styles.requestApprove, pressed && styles.pressed]}
+              >
+                <Text style={styles.requestApproveLabel}>Approve</Text>
+              </Pressable>
+            </View>
+          ))}
+        </View>
       )}
 
       {/* Members grid */}
@@ -672,6 +730,60 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.85,
+  },
+  requestApprove: {
+    backgroundColor: 'rgba(0,212,170,0.15)',
+    borderColor: 'rgba(0,212,170,0.4)',
+    borderRadius: RADII.pill,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  requestApproveLabel: {
+    color: COLORS.success,
+    fontFamily: FONTS.display,
+    fontSize: 12,
+  },
+  requestDecline: {
+    alignItems: 'center',
+    borderColor: COLORS.border,
+    borderRadius: 15,
+    borderWidth: 1,
+    height: 30,
+    justifyContent: 'center',
+    width: 30,
+  },
+  requestDeclineLabel: {
+    color: COLORS.textSecondary,
+    fontSize: 13,
+  },
+  requestInfo: {
+    flex: 1,
+  },
+  requestMeta: {
+    color: COLORS.textMuted,
+    fontFamily: FONTS.body,
+    fontSize: 11,
+    marginTop: 1,
+  },
+  requestName: {
+    color: COLORS.textPrimary,
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 14,
+  },
+  requestRow: {
+    alignItems: 'center',
+    backgroundColor: COLORS.card,
+    borderColor: 'rgba(123,97,255,0.3)',
+    borderRadius: RADII.input,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  requestRowGap: {
+    marginBottom: 8,
   },
   respondPill: {
     alignSelf: 'flex-start',

@@ -6,9 +6,9 @@ import Svg, { Circle, Path } from 'react-native-svg';
 
 import { COLORS, FONTS } from '@/lib/theme';
 
-type TabId = 'home' | 'create';
+type TabId = 'home' | 'create' | 'join';
 
-/** The prototype's bottom bar, reduced to the tabs that lead somewhere real. The prototype's third tab (a cross-group Activity feed) has no MVP backing surface — per-group activity lives on the group detail screen — so it returns only when a later phase builds that feed. */
+/** The prototype's bottom bar, reduced to the tabs that lead somewhere real. The prototype's third tab (a cross-group Activity feed) has no MVP backing surface — per-group activity lives on the group detail screen — so it returns only when a later phase builds that feed. Join is the D051 entry point, deliberately separate from Create. */
 export function BottomNav({ active }: { active: TabId }): ReactElement {
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -21,6 +21,7 @@ export function BottomNav({ active }: { active: TabId }): ReactElement {
   }[] = [
     { id: 'home', label: 'Groups', icon: homeIcon, onPress: () => router.push('/') },
     { id: 'create', label: 'New', icon: plusIcon, onPress: () => router.push('/create-group') },
+    { id: 'join', label: 'Join', icon: joinIcon, onPress: () => router.push('/join-group') },
   ];
 
   return (
@@ -75,6 +76,21 @@ function plusIcon(active: boolean): ReactElement {
         stroke={stroke(active)}
         strokeWidth={1.8}
         strokeLinecap="round"
+      />
+    </Svg>
+  );
+}
+
+function joinIcon(active: boolean): ReactElement {
+  return (
+    <Svg width={22} height={22} viewBox="0 0 22 22" fill="none">
+      <Path
+        d="M13 4h4a1 1 0 011 1v12a1 1 0 01-1 1h-4M9 15l4-4-4-4M13 11H3"
+        stroke={stroke(active)}
+        strokeWidth={1.8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill={fill(active)}
       />
     </Svg>
   );

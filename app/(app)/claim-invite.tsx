@@ -30,6 +30,7 @@ export default function ClaimInviteScreen(): ReactElement {
     tokenParam ? normalizeInviteToken(tokenParam) : null,
   );
   const [preview, setPreview] = useState<PreviewShareInviteResult | null>(null);
+  const [connectedWith, setConnectedWith] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isClaiming, setIsClaiming] = useState(false);
 
@@ -78,8 +79,30 @@ export default function ClaimInviteScreen(): ReactElement {
       setError(result.error.message);
       return;
     }
+    if (result.data.status === 'connected') {
+      // Connect links (D055) have no group to land in; show the mutual-connection result instead.
+      setConnectedWith(preview?.inviter_name ?? null);
+      return;
+    }
     router.dismissTo(`/group/${result.data.group_id}`);
-  }, [token, router]);
+  }, [token, router, preview]);
+
+  if (connectedWith !== null) {
+    return (
+      <View style={[styles.flex, styles.connectedWrap, { paddingTop: insets.top }]}>
+        <Text style={styles.connectedEmoji}>🤝</Text>
+        <Text style={styles.connectedTitle}>
+          {connectedWith ? `You’re connected with ${connectedWith.split(/\s+/)[0]}!` : 'You’re connected!'}
+        </Text>
+        <Text style={styles.connectedSub}>
+          You can now invite each other to groups. Find them any time in your connections.
+        </Text>
+        <View style={styles.connectedButtonWrap}>
+          <GradientButton label="Back to Home" onPress={() => router.dismissTo('/')} variant="invite" />
+        </View>
+      </View>
+    );
+  }
 
   return (
     <ScrollView
@@ -126,16 +149,24 @@ export default function ClaimInviteScreen(): ReactElement {
       ) : (
         <View style={styles.section}>
           <View style={styles.previewCard}>
-            <Text style={styles.previewEmoji}>💌</Text>
-            <Text style={styles.previewTitle}>{preview.group_name}</Text>
+            <Text style={styles.previewEmoji}>{preview.kind === 'connect' ? '🤝' : '💌'}</Text>
+            <Text style={styles.previewTitle}>
+              {preview.kind === 'connect'
+                ? (preview.inviter_name ?? 'A Callout user')
+                : preview.group_name}
+            </Text>
             <Text style={styles.previewSub}>
-              {preview.inviter_name
-                ? `${preview.inviter_name.split(/\s+/)[0]} invited you — joining also connects the two of you.`
-                : 'You’ve been invited to join this group.'}
+              {preview.kind === 'connect'
+                ? 'wants to connect on Callout — accepting links you both as connections, no group involved.'
+                : preview.inviter_name
+                  ? `${preview.inviter_name.split(/\s+/)[0]} invited you — joining also connects the two of you.`
+                  : 'You’ve been invited to join this group.'}
             </Text>
-            <Text style={styles.previewMeta}>
-              {preview.member_count} {preview.member_count === 1 ? 'member' : 'members'}
-            </Text>
+            {preview.kind === 'group' && (
+              <Text style={styles.previewMeta}>
+                {preview.member_count} {preview.member_count === 1 ? 'member' : 'members'}
+              </Text>
+            )}
           </View>
 
           {preview.status === 'used' ? (
@@ -153,7 +184,15 @@ export default function ClaimInviteScreen(): ReactElement {
             </>
           ) : (
             <GradientButton
-              label={isClaiming ? 'Joining…' : 'Join Group 🎉'}
+              label={
+                isClaiming
+                  ? preview.kind === 'connect'
+                    ? 'Connecting…'
+                    : 'Joining…'
+                  : preview.kind === 'connect'
+                    ? 'Connect 🤝'
+                    : 'Join Group 🎉'
+              }
               onPress={handleClaim}
               disabled={isClaiming}
               variant="invite"
@@ -179,6 +218,35 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     textAlign: 'center',
+  },
+  connectedButtonWrap: {
+    maxWidth: 280,
+    width: '100%',
+  },
+  connectedEmoji: {
+    fontSize: 40,
+    marginBottom: 12,
+  },
+  connectedSub: {
+    color: COLORS.textSecondary,
+    fontFamily: FONTS.body,
+    fontSize: 14,
+    lineHeight: 20,
+    marginBottom: 32,
+    textAlign: 'center',
+  },
+  connectedTitle: {
+    color: COLORS.textPrimary,
+    fontFamily: FONTS.displayBlack,
+    fontSize: 26,
+    letterSpacing: -1,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  connectedWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
   },
   flex: {
     backgroundColor: COLORS.background,
