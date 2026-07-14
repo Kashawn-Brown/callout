@@ -13,6 +13,18 @@ export type Profile = {
   id: string;
   display_name: string;
   avatar_url: string | null;
+  /** Shareable short user ID (D032): server-generated, never client-writable. */
+  short_id: string;
+  /** User-picked avatar accent from the fixed palette; null falls back to the per-user hash color (resolveAvatarColor). */
+  avatar_color: string | null;
+};
+
+export type Connection = {
+  id: string;
+  /** Pair columns are canonicalized (user_a_id < user_b_id); which side is "you" varies per row (D033). */
+  user_a_id: string;
+  user_b_id: string;
+  created_at: string;
 };
 
 export type Group = {
@@ -22,6 +34,15 @@ export type Group = {
   status: GroupStatus;
   /** Postgres interval serialized as text (e.g. "01:00:00" or "1 day"); parse with parseIntervalToMinutes. */
   per_turn_deadline: string;
+  /** Persistent join code (D050): instant entry pre-start, host-approved request once started (D051). Server-generated, never regenerates in MVP. */
+  join_code: string;
+  created_at: string;
+};
+
+export type JoinRequest = {
+  id: string;
+  group_id: string;
+  user_id: string;
   created_at: string;
 };
 

@@ -1,6 +1,4 @@
-import type { PostgrestError } from '@supabase/supabase-js';
-
-import { supabase } from '@/lib/supabase';
+import { callRpc } from '@/lib/rpc';
 import type {
   CallOutPlayerParams,
   CallOutPlayerResult,
@@ -8,14 +6,15 @@ import type {
   CreateGroupResult,
   InvitePlayerParams,
   InvitePlayerResult,
-  ProfileSearchRow,
+  JoinGroupByCodeParams,
+  JoinGroupByCodeResult,
   RemovePlayerParams,
   RemovePlayerResult,
+  RespondJoinRequestParams,
+  RespondJoinRequestResult,
   RespondToInviteParams,
   RespondToInviteResult,
-  RpcError,
   RpcResult,
-  SearchProfilesParams,
   SkipTurnParams,
   SkipTurnResult,
   StartGameParams,
@@ -23,28 +22,6 @@ import type {
   SubmitTurnParams,
   SubmitTurnResult,
 } from '@/types/api';
-
-/** The server raises app errors with the stable machine code in DETAIL (surfaced as PostgrestError.details) and the human message in MESSAGE — see private.raise_app_error in the Phase 3 migration. Non-app failures (network, permission) fall back to the SQLSTATE. */
-function toRpcError(error: PostgrestError): RpcError {
-  return {
-    code: error.details || error.code || 'unknown_error',
-    message: error.message,
-  };
-}
-
-async function callRpc<T>(fn: string, params: Record<string, unknown>): Promise<RpcResult<T>> {
-  const { data, error } = await supabase.rpc(fn, params);
-  if (error) {
-    return { data: null, error: toRpcError(error) };
-  }
-  return { data: data as T, error: null };
-}
-
-export async function searchProfiles(
-  params: SearchProfilesParams,
-): Promise<RpcResult<ProfileSearchRow[]>> {
-  return callRpc<ProfileSearchRow[]>('search_profiles', params);
-}
 
 export async function createGroup(
   params: CreateGroupParams,
@@ -86,4 +63,16 @@ export async function removePlayer(
   params: RemovePlayerParams,
 ): Promise<RpcResult<RemovePlayerResult>> {
   return callRpc<RemovePlayerResult>('remove_player', params);
+}
+
+export async function joinGroupByCode(
+  params: JoinGroupByCodeParams,
+): Promise<RpcResult<JoinGroupByCodeResult>> {
+  return callRpc<JoinGroupByCodeResult>('join_group_by_code', params);
+}
+
+export async function respondJoinRequest(
+  params: RespondJoinRequestParams,
+): Promise<RpcResult<RespondJoinRequestResult>> {
+  return callRpc<RespondJoinRequestResult>('respond_join_request', params);
 }

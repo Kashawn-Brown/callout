@@ -6,11 +6,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ErrorBanner } from '@/components/ErrorBanner';
 import { FormField } from '@/components/FormField';
 import { GradientButton } from '@/components/GradientButton';
-import { signInWithEmail } from '@/features/auth/api';
+import { SegmentedToggle } from '@/components/SegmentedToggle';
+import { signInWithEmail, signInWithPhone } from '@/features/auth/api';
+import { PhoneOtpForm } from '@/features/auth/PhoneOtpForm';
 import { COLORS, FONTS, SPACING } from '@/lib/theme';
+
+type AuthMethod = 'email' | 'phone';
 
 export default function SignInScreen(): ReactElement {
   const insets = useSafeAreaInsets();
+  const [method, setMethod] = useState<AuthMethod>('email');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -45,33 +50,55 @@ export default function SignInScreen(): ReactElement {
         <Text style={styles.tagline}>You&apos;re on the clock 🔥</Text>
 
         <View style={styles.form}>
-          <FormField
-            label="Email"
-            value={email}
-            onChangeText={setEmail}
-            placeholder="you@example.com"
-            autoCapitalize="none"
-            autoComplete="email"
-            keyboardType="email-address"
-            textContentType="emailAddress"
-          />
-          <FormField
-            label="Password"
-            value={password}
-            onChangeText={setPassword}
-            placeholder="Your password"
-            secureTextEntry
-            autoComplete="current-password"
-            textContentType="password"
+          <SegmentedToggle
+            options={[
+              { id: 'email', label: 'Email' },
+              { id: 'phone', label: 'Phone' },
+            ]}
+            activeId={method}
+            onChange={(id) => {
+              setMethod(id as AuthMethod);
+              setError(null);
+            }}
           />
 
-          {error !== null && <ErrorBanner message={error} />}
+          {method === 'email' ? (
+            <>
+              <FormField
+                label="Email"
+                value={email}
+                onChangeText={setEmail}
+                placeholder="you@example.com"
+                autoCapitalize="none"
+                autoComplete="email"
+                keyboardType="email-address"
+                textContentType="emailAddress"
+              />
+              <FormField
+                label="Password"
+                value={password}
+                onChangeText={setPassword}
+                placeholder="Your password"
+                secureTextEntry
+                autoComplete="current-password"
+                textContentType="password"
+              />
 
-          <GradientButton
-            label={submitting ? 'Signing in…' : 'Sign In'}
-            onPress={handleSignIn}
-            disabled={!canSubmit}
-          />
+              {error !== null && <ErrorBanner message={error} />}
+
+              <GradientButton
+                label={submitting ? 'Signing in…' : 'Sign In'}
+                onPress={handleSignIn}
+                disabled={!canSubmit}
+              />
+            </>
+          ) : (
+            <>
+              {error !== null && <ErrorBanner message={error} />}
+              {/* Sign-in never creates an account (shouldCreateUser: false) — a typo'd number errors instead of minting a ghost user (D037). */}
+              <PhoneOtpForm onSend={signInWithPhone} onError={setError} />
+            </>
+          )}
         </View>
 
         <View style={styles.switchRow}>

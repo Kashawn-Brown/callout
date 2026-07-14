@@ -1,7 +1,8 @@
 import { supabase } from '@/lib/supabase';
-import { initialsOf, memberColor } from '@/lib/format';
+import { initialsOf, resolveAvatarColor } from '@/lib/format';
 import type {
   Group,
+  JoinRequest,
   Membership,
   MembershipRole,
   MembershipStatus,
@@ -52,9 +53,20 @@ export type ActivityItem = {
   nextWasSystemPick: boolean;
 };
 
+/** A pending join-by-code request (D051), resolved to the requester for the host's approve/decline UI. */
+export type JoinRequestView = {
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+  color: string;
+  initials: string;
+  requestedAt: string;
+};
+
 export type GroupDetail = GroupSummary & {
   turnsThisRound: Turn[];
   activity: ActivityItem[];
+  joinRequests: JoinRequestView[];
 };
 
 export type PendingInvite = {
@@ -84,7 +96,7 @@ function toMemberView(membership: Membership, profilesById: Map<string, Profile>
     avatarUrl: profile?.avatar_url ?? null,
     role: membership.role,
     status: membership.status,
-    color: memberColor(membership.user_id),
+    color: resolveAvatarColor(membership.user_id, profile?.avatar_color),
     initials: initialsOf(displayName),
   };
 }
@@ -95,13 +107,13 @@ async function fetchProfilesById(userIds: string[]): Promise<Map<string, Profile
   }
   const { data, error } = await supabase
     .from('profile')
-    .select('id, display_name, avatar_url')
+    .select('id, display_name, avatar_url, avatar_color')
     .in('id', userIds);
   assertNoError(error, 'load profiles');
   return new Map((data as Profile[]).map((p) => [p.id, p]));
 }
 
-const GROUP_COLUMNS = 'id, name, host_id, status, per_turn_deadline, created_at';
+const GROUP_COLUMNS = 'id, name, host_id, status, per_turn_deadline, join_code, created_at';
 const MEMBERSHIP_COLUMNS = 'id, group_id, user_id, role, status, joined_at';
 const TURN_COLUMNS =
   'id, round_id, group_id, called_out_user_id, called_by_user_id, deadline_at, status, created_at';
@@ -252,7 +264,7 @@ export async function fetchHomeData(userId: string): Promise<HomeData> {
 const ACTIVITY_TURN_LIMIT = 25;
 
 export async function fetchGroupDetail(groupId: string): Promise<GroupDetail> {
-  const [groupRes, rosterRes, roundRes, recentTurnsRes] = await Promise.all([
+  const [groupRes, rosterRes, roundRes, recentTurnsRes, requestsRes] = await Promise.all([
     supabase.from('group').select(GROUP_COLUMNS).eq('id', groupId).single(),
     supabase
       .from('membership')
@@ -271,18 +283,41 @@ export async function fetchGroupDetail(groupId: string): Promise<GroupDetail> {
       .eq('group_id', groupId)
       .order('created_at', { ascending: false })
       .limit(ACTIVITY_TURN_LIMIT),
+    supabase
+      .from('join_request')
+      .select('id, group_id, user_id, created_at')
+      .eq('group_id', groupId)
+      .order('created_at', { ascending: true }),
   ]);
   assertNoError(groupRes.error, 'load group');
   assertNoError(rosterRes.error, 'load roster');
   assertNoError(roundRes.error, 'load round');
   assertNoError(recentTurnsRes.error, 'load turns');
+  assertNoError(requestsRes.error, 'load join requests');
 
   const group = groupRes.data as Group;
   const roster = rosterRes.data as Membership[];
   const currentRound = (roundRes.data as Round | null) ?? null;
   const recentTurns = recentTurnsRes.data as Turn[];
+  const requests = requestsRes.data as JoinRequest[];
 
-  const profilesById = await fetchProfilesById([...new Set(roster.map((m) => m.user_id))]);
+  // Requester profiles are readable while their request is pending (the has_pending_request_to_my_group policy predicate).
+  const profilesById = await fetchProfilesById([
+    ...new Set([...roster.map((m) => m.user_id), ...requests.map((r) => r.user_id)]),
+  ]);
+
+  const joinRequests: JoinRequestView[] = requests.map((r) => {
+    const profile = profilesById.get(r.user_id);
+    const displayName = profile?.display_name ?? 'Unknown player';
+    return {
+      userId: r.user_id,
+      displayName,
+      avatarUrl: profile?.avatar_url ?? null,
+      color: resolveAvatarColor(r.user_id, profile?.avatar_color),
+      initials: initialsOf(displayName),
+      requestedAt: r.created_at,
+    };
+  });
 
   const submittedTurnIds = recentTurns.map((t) => t.id);
   let submissions: Submission[] = [];
@@ -351,5 +386,6 @@ export async function fetchGroupDetail(groupId: string): Promise<GroupDetail> {
       : null,
     turnsThisRound,
     activity,
+    joinRequests,
   };
 }

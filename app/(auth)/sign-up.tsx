@@ -1,23 +1,39 @@
 import { Link } from 'expo-router';
 import { useCallback, useState, type ReactElement } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ErrorBanner } from '@/components/ErrorBanner';
 import { FormField } from '@/components/FormField';
 import { GradientButton } from '@/components/GradientButton';
-import { signUpWithEmail } from '@/features/auth/api';
+import { SegmentedToggle } from '@/components/SegmentedToggle';
+import { signUpWithEmail, signUpWithPhone } from '@/features/auth/api';
+import { PhoneOtpForm } from '@/features/auth/PhoneOtpForm';
+import { normalizeJoinCode, stashPendingJoinCode } from '@/features/connections/pending-invite';
 import { COLORS, FONTS, SPACING } from '@/lib/theme';
 
 // Mirrors the profile.display_name check constraint (1–50 chars) so validation fails in the form, not in the database trigger.
 const DISPLAY_NAME_MAX_LENGTH = 50;
 const PASSWORD_MIN_LENGTH = 6;
 
+type AuthMethod = 'email' | 'phone';
+
 export default function SignUpScreen(): ReactElement {
   const insets = useSafeAreaInsets();
+  const [method, setMethod] = useState<AuthMethod>('email');
   const [displayName, setDisplayName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
+  const [showInviteField, setShowInviteField] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [confirmationSent, setConfirmationSent] = useState(false);
@@ -29,9 +45,31 @@ export default function SignUpScreen(): ReactElement {
     password.length >= PASSWORD_MIN_LENGTH &&
     !submitting;
 
+  const displayNameMissing =
+    displayName.trim().length === 0 || displayName.trim().length > DISPLAY_NAME_MAX_LENGTH;
+
+  // Stashes a typed group code (D063 — the one invite shape) so the home screen resumes it right after the session exists, opening Join Group pre-filled (D064); returns false when input is present but malformed.
+  const stashInviteIfPresent = useCallback(async (): Promise<boolean> => {
+    const raw = inviteCode.trim();
+    if (raw.length === 0) {
+      return true;
+    }
+    const code = normalizeJoinCode(raw);
+    if (!code) {
+      setError('That code doesn’t look right — group codes are 8 letters and numbers.');
+      return false;
+    }
+    await stashPendingJoinCode(code);
+    return true;
+  }, [inviteCode]);
+
   const handleSignUp = useCallback(async () => {
     setSubmitting(true);
     setError(null);
+    if (!(await stashInviteIfPresent())) {
+      setSubmitting(false);
+      return;
+    }
     const result = await signUpWithEmail(email, password, displayName);
     if (result.error) {
       setError(result.error.message);
@@ -44,7 +82,17 @@ export default function SignUpScreen(): ReactElement {
       setSubmitting(false);
     }
     // Otherwise a session now exists and the root layout's guard swaps to the (app) group.
-  }, [displayName, email, password]);
+  }, [displayName, email, password, stashInviteIfPresent]);
+
+  const handlePhoneSend = useCallback(
+    async (phone: string) => {
+      if (!(await stashInviteIfPresent())) {
+        return { error: { code: 'invalid_input', message: 'Fix the invite code first.' } };
+      }
+      return signUpWithPhone(phone, displayName);
+    },
+    [displayName, stashInviteIfPresent],
+  );
 
   if (confirmationSent) {
     return (
@@ -77,6 +125,18 @@ export default function SignUpScreen(): ReactElement {
         <Text style={styles.tagline}>Set up your account — your crew is waiting</Text>
 
         <View style={styles.form}>
+          <SegmentedToggle
+            options={[
+              { id: 'email', label: 'Email' },
+              { id: 'phone', label: 'Phone' },
+            ]}
+            activeId={method}
+            onChange={(id) => {
+              setMethod(id as AuthMethod);
+              setError(null);
+            }}
+          />
+
           <FormField
             label="Display Name"
             value={displayName}
@@ -85,33 +145,63 @@ export default function SignUpScreen(): ReactElement {
             maxLength={DISPLAY_NAME_MAX_LENGTH}
             autoComplete="name"
           />
-          <FormField
-            label="Email"
-            value={email}
-            onChangeText={setEmail}
-            placeholder="you@example.com"
-            autoCapitalize="none"
-            autoComplete="email"
-            keyboardType="email-address"
-            textContentType="emailAddress"
-          />
-          <FormField
-            label="Password"
-            value={password}
-            onChangeText={setPassword}
-            placeholder={`At least ${PASSWORD_MIN_LENGTH} characters`}
-            secureTextEntry
-            autoComplete="new-password"
-            textContentType="newPassword"
-          />
+
+          {method === 'email' ? (
+            <>
+              <FormField
+                label="Email"
+                value={email}
+                onChangeText={setEmail}
+                placeholder="you@example.com"
+                autoCapitalize="none"
+                autoComplete="email"
+                keyboardType="email-address"
+                textContentType="emailAddress"
+              />
+              <FormField
+                label="Password"
+                value={password}
+                onChangeText={setPassword}
+                placeholder={`At least ${PASSWORD_MIN_LENGTH} characters`}
+                secureTextEntry
+                autoComplete="new-password"
+                textContentType="newPassword"
+              />
+            </>
+          ) : null}
+
+          {showInviteField ? (
+            <FormField
+              label="Group Code"
+              value={inviteCode}
+              onChangeText={setInviteCode}
+              placeholder="8-character code from a group"
+              autoCapitalize="characters"
+              autoCorrect={false}
+              maxLength={8}
+            />
+          ) : (
+            <Pressable onPress={() => setShowInviteField(true)}>
+              <Text style={styles.inviteLink}>Have a group code?</Text>
+            </Pressable>
+          )}
 
           {error !== null && <ErrorBanner message={error} />}
 
-          <GradientButton
-            label={submitting ? 'Creating account…' : 'Create Account'}
-            onPress={handleSignUp}
-            disabled={!canSubmit}
-          />
+          {method === 'email' ? (
+            <GradientButton
+              label={submitting ? 'Creating account…' : 'Create Account'}
+              onPress={handleSignUp}
+              disabled={!canSubmit}
+            />
+          ) : (
+            // No password on the phone path (D037): the SMS code is the whole credential.
+            <PhoneOtpForm
+              onSend={handlePhoneSend}
+              onError={setError}
+              sendDisabled={displayNameMissing}
+            />
+          )}
         </View>
 
         <View style={styles.switchRow}>
@@ -167,6 +257,11 @@ const styles = StyleSheet.create({
   form: {
     gap: 18,
     marginTop: 40,
+  },
+  inviteLink: {
+    color: COLORS.invite,
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 13,
   },
   switchLink: {
     color: COLORS.invite,

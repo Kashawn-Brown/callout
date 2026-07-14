@@ -9,12 +9,14 @@ import {
   PlusJakartaSans_600SemiBold,
   PlusJakartaSans_700Bold,
 } from '@expo-google-fonts/plus-jakarta-sans';
+import { useLinkingURL } from 'expo-linking';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, type ReactElement } from 'react';
 
 import { SessionProvider, useSession } from '@/features/auth/SessionProvider';
+import { joinCodeFromUrl, stashPendingJoinCode } from '@/features/connections/pending-invite';
 import { COLORS } from '@/lib/theme';
 
 // Keep the native splash visible until fonts and the persisted session are both ready, so cold start never flashes the wrong route group or unstyled text.
@@ -30,6 +32,19 @@ export default function RootLayout(): ReactElement {
 
 function RootNavigator(): ReactElement | null {
   const { session, isLoading } = useSession();
+  const url = useLinkingURL();
+
+  // Group share links (D063/D053): signed in, expo-router routes straight to /join-group with the code pre-filled (D064). Signed out, the route guard would drop the URL on the way to sign-in — so the code is stashed here and the home screen resumes it right after auth.
+  useEffect(() => {
+    if (!url || session !== null) {
+      return;
+    }
+    const code = joinCodeFromUrl(url);
+    if (code) {
+      void stashPendingJoinCode(code);
+    }
+  }, [url, session]);
+
   const [fontsLoaded] = useFonts({
     Outfit_700Bold,
     Outfit_800ExtraBold,

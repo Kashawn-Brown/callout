@@ -1,6 +1,6 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -19,8 +19,8 @@ import { CountdownRing } from '@/components/CountdownRing';
 import { ErrorBanner } from '@/components/ErrorBanner';
 import { IconButton } from '@/components/IconButton';
 import { useSession } from '@/features/auth/SessionProvider';
-import { removePlayer, skipTurn, startGame } from '@/features/groups/api';
-import type { GroupDetail, MemberView } from '@/features/groups/queries';
+import { removePlayer, respondJoinRequest, skipTurn, startGame } from '@/features/groups/api';
+import type { GroupDetail, JoinRequestView, MemberView } from '@/features/groups/queries';
 import { useCountdown } from '@/features/groups/useCountdown';
 import { useGroupDetail } from '@/features/groups/useGroupDetail';
 import { deadlineLabel, parseIntervalToMinutes, timeAgoLabel } from '@/lib/format';
@@ -64,12 +64,24 @@ function memberStatusThisRound(userId: string, turnsThisRound: Turn[]): MemberRo
 export default function GroupDetailScreen(): ReactElement {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, notice } = useLocalSearchParams<{ id: string; notice?: string }>();
   const { session } = useSession();
   const { detail, isLoading, error, refetch } = useGroupDetail(id ?? null);
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [isActing, setIsActing] = useState(false);
+  // Informational toast for the D067 redirect: an already-member landed here from a join link and just needs to know why, briefly.
+  const [noticeVisible, setNoticeVisible] = useState(notice === 'already-member');
+
+  useEffect(() => {
+    if (!noticeVisible) {
+      return;
+    }
+    const timer = setTimeout(() => setNoticeVisible(false), 3500);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [noticeVisible]);
 
   const userId = session?.user.id ?? null;
   const isHost = detail !== null && userId !== null && detail.group.host_id === userId;
@@ -118,6 +130,29 @@ export default function GroupDetailScreen(): ReactElement {
       ],
     );
   }, [detail, refetch]);
+
+  // Approve or decline a join-by-code request (D051). Decline is deliberately quiet — the requester can always ask again with the same code.
+  const handleRespondRequest = useCallback(
+    async (request: JoinRequestView, approve: boolean) => {
+      if (!detail) {
+        return;
+      }
+      setIsActing(true);
+      setActionError(null);
+      const result = await respondJoinRequest({
+        target_group_id: detail.group.id,
+        target_user_id: request.userId,
+        approve,
+      });
+      setIsActing(false);
+      if (result.error) {
+        setActionError(result.error.message);
+      } else {
+        refetch();
+      }
+    },
+    [detail, refetch],
+  );
 
   const handleRemoveMember = useCallback(
     (member: MemberView) => {
@@ -190,26 +225,19 @@ export default function GroupDetailScreen(): ReactElement {
           <Text style={styles.title}>{detail.group.name}</Text>
           <Text style={styles.subtitle}>{subtitle}</Text>
         </View>
-        {isHost && (
-          <IconButton
-            onPress={() => router.push(`/group/${detail.group.id}/invite`)}
-            accessibilityLabel="Invite a player"
-          >
-            <Svg width={16} height={16} viewBox="0 0 16 16" fill="none">
-              <Path
-                d="M8 3v10M3 8h10"
-                stroke={COLORS.textSecondary}
-                strokeWidth={2}
-                strokeLinecap="round"
-              />
-            </Svg>
-          </IconButton>
-        )}
       </View>
 
       {(error !== null || actionError !== null) && (
         <View style={styles.bannerWrap}>
           <ErrorBanner message={actionError ?? error ?? ''} />
+        </View>
+      )}
+
+      {noticeVisible && (
+        <View style={styles.bannerWrap}>
+          <View style={styles.noticeBanner}>
+            <Text style={styles.noticeBannerText}>You’re already in this group 👍</Text>
+          </View>
         </View>
       )}
 
@@ -282,9 +310,62 @@ export default function GroupDetailScreen(): ReactElement {
         />
       )}
 
-      {/* Members grid */}
+      {/* Pending join requests (D051) — host approves or declines */}
+      {isHost && detail.joinRequests.length > 0 && (
+        <View style={styles.section}>
+          <Text style={styles.sectionLabel}>Join Requests</Text>
+          {detail.joinRequests.map((request, i) => (
+            <View
+              key={request.userId}
+              style={[styles.requestRow, i < detail.joinRequests.length - 1 && styles.requestRowGap]}
+            >
+              <Avatar initials={request.initials} color={request.color} size={38} />
+              <View style={styles.requestInfo}>
+                <Text style={styles.requestName}>{request.displayName}</Text>
+                <Text style={styles.requestMeta}>Wants to join via the group code</Text>
+              </View>
+              <Pressable
+                onPress={() => handleRespondRequest(request, false)}
+                disabled={isActing}
+                accessibilityLabel={`Decline ${request.displayName}`}
+                style={({ pressed }) => [styles.requestDecline, pressed && styles.pressed]}
+              >
+                <Text style={styles.requestDeclineLabel}>✕</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => handleRespondRequest(request, true)}
+                disabled={isActing}
+                accessibilityLabel={`Approve ${request.displayName}`}
+                style={({ pressed }) => [styles.requestApprove, pressed && styles.pressed]}
+              >
+                <Text style={styles.requestApproveLabel}>Approve</Text>
+              </Pressable>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {/* Members grid — the host's add-people entry point lives on this row (label left, "+" right), matching the home screen's section-row pattern. */}
       <View style={styles.section}>
-        <Text style={styles.sectionLabel}>Members</Text>
+        <View style={styles.sectionRow}>
+          <Text style={[styles.sectionLabel, styles.sectionLabelInRow]}>Members</Text>
+          {isHost && (
+            <IconButton
+              onPress={() => router.push(`/group/${detail.group.id}/invite`)}
+              accessibilityLabel="Add people"
+              size={30}
+            >
+              <Svg width={14} height={14} viewBox="0 0 14 14" fill="none">
+                <Path
+                  d="M7 2.5v9M2.5 7h9"
+                  stroke={COLORS.textSecondary}
+                  strokeWidth={2}
+                  strokeLinecap="round"
+                />
+              </Svg>
+            </IconButton>
+          )}
+        </View>
         <View style={styles.membersGrid}>
           {detail.members.map((m) => {
             const status = memberStatusThisRound(m.userId, detail.turnsThisRound);
@@ -659,6 +740,19 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
   },
+  noticeBanner: {
+    backgroundColor: 'rgba(123,97,255,0.10)',
+    borderColor: 'rgba(123,97,255,0.3)',
+    borderRadius: RADII.input,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+  },
+  noticeBannerText: {
+    color: COLORS.invite,
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 13,
+  },
   openTurnButton: {
     alignItems: 'center',
     borderRadius: 14,
@@ -672,6 +766,60 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.85,
+  },
+  requestApprove: {
+    backgroundColor: 'rgba(0,212,170,0.15)',
+    borderColor: 'rgba(0,212,170,0.4)',
+    borderRadius: RADII.pill,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+  },
+  requestApproveLabel: {
+    color: COLORS.success,
+    fontFamily: FONTS.display,
+    fontSize: 12,
+  },
+  requestDecline: {
+    alignItems: 'center',
+    borderColor: COLORS.border,
+    borderRadius: 15,
+    borderWidth: 1,
+    height: 30,
+    justifyContent: 'center',
+    width: 30,
+  },
+  requestDeclineLabel: {
+    color: COLORS.textSecondary,
+    fontSize: 13,
+  },
+  requestInfo: {
+    flex: 1,
+  },
+  requestMeta: {
+    color: COLORS.textMuted,
+    fontFamily: FONTS.body,
+    fontSize: 11,
+    marginTop: 1,
+  },
+  requestName: {
+    color: COLORS.textPrimary,
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 14,
+  },
+  requestRow: {
+    alignItems: 'center',
+    backgroundColor: COLORS.card,
+    borderColor: 'rgba(123,97,255,0.3)',
+    borderRadius: RADII.input,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  requestRowGap: {
+    marginBottom: 8,
   },
   respondPill: {
     alignSelf: 'flex-start',
@@ -695,6 +843,15 @@ const styles = StyleSheet.create({
   sectionLabel: {
     ...SECTION_LABEL,
     marginBottom: 12,
+  },
+  sectionLabelInRow: {
+    marginBottom: 0,
+  },
+  sectionRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
   },
   skipButton: {
     alignItems: 'center',

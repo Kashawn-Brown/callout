@@ -10,8 +10,10 @@ import { GradientButton } from '@/components/GradientButton';
 import { useSession } from '@/features/auth/SessionProvider';
 import { callOutPlayer } from '@/features/groups/api';
 import type { MemberView } from '@/features/groups/queries';
+import { useCountdown } from '@/features/groups/useCountdown';
 import { useGroupDetail } from '@/features/groups/useGroupDetail';
 import { deadlineLabel, parseIntervalToMinutes } from '@/lib/format';
+import { PICK_WINDOW_MINUTES } from '@/types/api';
 import { COLORS, FONTS, RADII, SPACING } from '@/lib/theme';
 
 export default function PickNextScreen(): ReactElement {
@@ -46,6 +48,9 @@ export default function PickNextScreen(): ReactElement {
   const windowMinutes = detail ? parseIntervalToMinutes(detail.group.per_turn_deadline) : null;
   const windowLabel = windowMinutes !== null ? deadlineLabel(windowMinutes) : 'their window';
   const picked = eligible.find((m) => m.userId === pickedId) ?? null;
+
+  // After submission the turn's deadline_at IS the five-minute pick window (D042); when it lapses the job system-picks and this screen's error paths take over.
+  const pickCountdown = useCountdown(handoffTurn?.deadline_at ?? null, PICK_WINDOW_MINUTES);
 
   // Plain function rather than useCallback: `picked` derives from the fetched roster each render, so manual memoization cannot be preserved (react-hooks/preserve-manual-memoization) and nothing downstream needs a stable reference.
   const handleCallOut = async (): Promise<void> => {
@@ -162,6 +167,11 @@ export default function PickNextScreen(): ReactElement {
         </View>
         <Text style={styles.title}>Who’s up next?</Text>
         <Text style={styles.subtitle}>Pick someone from {detail.group.name} to call out</Text>
+        <Text style={[styles.pickWindowNote, pickCountdown.urgent && styles.pickWindowNoteUrgent]}>
+          {pickCountdown.expired
+            ? 'Time’s up — the system is picking someone for you'
+            : `Pick within ${pickCountdown.label} or the system picks for you`}
+        </Text>
       </View>
 
       {callError !== null && (
@@ -302,6 +312,15 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.body,
     fontSize: 12,
     marginTop: 2,
+  },
+  pickWindowNote: {
+    color: COLORS.textMuted,
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 12,
+    marginTop: 10,
+  },
+  pickWindowNoteUrgent: {
+    color: COLORS.warning,
   },
   postedChip: {
     alignItems: 'center',

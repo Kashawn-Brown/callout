@@ -73,6 +73,11 @@ export function useGroupDetail(groupId: string | null): UseGroupDetailResult {
         { event: '*', schema: 'public', table: 'group', filter: `id=eq.${groupId}` },
         () => load(),
       )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'join_request', filter: groupFilter },
+        () => load(),
+      )
       .subscribe();
 
     return () => {
