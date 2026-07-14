@@ -1,6 +1,6 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useState, type ReactElement } from 'react';
+import { useCallback, useEffect, useState, type ReactElement } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -64,12 +64,24 @@ function memberStatusThisRound(userId: string, turnsThisRound: Turn[]): MemberRo
 export default function GroupDetailScreen(): ReactElement {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, notice } = useLocalSearchParams<{ id: string; notice?: string }>();
   const { session } = useSession();
   const { detail, isLoading, error, refetch } = useGroupDetail(id ?? null);
 
   const [actionError, setActionError] = useState<string | null>(null);
   const [isActing, setIsActing] = useState(false);
+  // Informational toast for the D067 redirect: an already-member landed here from a join link and just needs to know why, briefly.
+  const [noticeVisible, setNoticeVisible] = useState(notice === 'already-member');
+
+  useEffect(() => {
+    if (!noticeVisible) {
+      return;
+    }
+    const timer = setTimeout(() => setNoticeVisible(false), 3500);
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [noticeVisible]);
 
   const userId = session?.user.id ?? null;
   const isHost = detail !== null && userId !== null && detail.group.host_id === userId;
@@ -218,6 +230,14 @@ export default function GroupDetailScreen(): ReactElement {
       {(error !== null || actionError !== null) && (
         <View style={styles.bannerWrap}>
           <ErrorBanner message={actionError ?? error ?? ''} />
+        </View>
+      )}
+
+      {noticeVisible && (
+        <View style={styles.bannerWrap}>
+          <View style={styles.noticeBanner}>
+            <Text style={styles.noticeBannerText}>You’re already in this group 👍</Text>
+          </View>
         </View>
       )}
 
@@ -719,6 +739,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+  },
+  noticeBanner: {
+    backgroundColor: 'rgba(123,97,255,0.10)',
+    borderColor: 'rgba(123,97,255,0.3)',
+    borderRadius: RADII.input,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+  },
+  noticeBannerText: {
+    color: COLORS.invite,
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 13,
   },
   openTurnButton: {
     alignItems: 'center',

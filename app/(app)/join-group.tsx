@@ -1,26 +1,81 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useState, type ReactElement } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useState, type ReactElement } from 'react';
+import {
+  ActivityIndicator,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BackButton } from '@/components/BackButton';
 import { ErrorBanner } from '@/components/ErrorBanner';
 import { GradientButton } from '@/components/GradientButton';
+import { useSession } from '@/features/auth/SessionProvider';
 import { normalizeJoinCode } from '@/features/connections/pending-invite';
 import { joinGroupByCode } from '@/features/groups/api';
+import { supabase } from '@/lib/supabase';
 import { COLORS, FONTS, RADII, SPACING } from '@/lib/theme';
 import type { JoinGroupByCodeResult } from '@/types/api';
 
-/** Join a group by its persistent code (D050/D051/D063): instant entry while the group is in setup, a host-approved request once it has started. Reached from the bottom nav, or by a share link with ?code= — which only pre-fills; joining always takes one explicit tap (D064). */
+/** Join a group by its persistent code (D050/D051/D063): instant entry while the group is in setup, a host-approved request once it has started. Reached from the bottom nav, or by a share link with ?code= — which only pre-fills; joining always takes one explicit tap (D064), except when the person is already a member, which skips this screen for the group itself (D067). */
 export default function JoinGroupScreen(): ReactElement {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { session } = useSession();
   const { code: codeParam } = useLocalSearchParams<{ code?: string }>();
+
+  const userId = session?.user.id ?? null;
 
   const [codeInput, setCodeInput] = useState(codeParam ?? '');
   const [outcome, setOutcome] = useState<JoinGroupByCodeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isJoining, setIsJoining] = useState(false);
+  // While a link-supplied code is being checked against existing memberships (D067), hold the form back so an already-member never sees a join prompt for their own group.
+  const [checkingMembership, setCheckingMembership] = useState(
+    () => codeParam !== undefined && normalizeJoinCode(codeParam) !== null,
+  );
+
+  // D067: a link for a group the person is already an active member of skips this screen entirely — straight to the group with an informational notice, no extra tap. This is the one exception to D064's require-a-tap rule; invited and removed members still land on the form, since their tap genuinely decides something (accept / re-request).
+  useEffect(() => {
+    const code = codeParam ? normalizeJoinCode(codeParam) : null;
+    if (!code || !userId) {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      // Group rows are participant-readable under RLS, so a hit here means some membership exists; the status decides whether the skip applies.
+      const { data: group } = await supabase
+        .from('group')
+        .select('id')
+        .eq('join_code', code)
+        .maybeSingle();
+      if (!cancelled && group) {
+        const { data: membership } = await supabase
+          .from('membership')
+          .select('status')
+          .eq('group_id', group.id)
+          .eq('user_id', userId)
+          .maybeSingle();
+        if (
+          !cancelled &&
+          (membership?.status === 'active' || membership?.status === 'out_eliminated')
+        ) {
+          router.replace(`/group/${group.id}?notice=already-member`);
+          return;
+        }
+      }
+      if (!cancelled) {
+        setCheckingMembership(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [codeParam, userId, router]);
 
   const handleJoin = useCallback(
     async (raw: string) => {
@@ -37,27 +92,20 @@ export default function JoinGroupScreen(): ReactElement {
         setError(result.error.message);
         return;
       }
+      // Manually typed code for a group they're already in: same D067 outcome as the link path.
+      if (result.data.status === 'already_member') {
+        router.replace(`/group/${result.data.group_id}?notice=already-member`);
+        return;
+      }
       setOutcome(result.data);
     },
-    [],
+    [router],
   );
 
-  // Already an active member (D065): information, not an error — one tap opens the group.
-  if (outcome !== null && outcome.status === 'already_member') {
+  if (checkingMembership) {
     return (
       <View style={[styles.flex, styles.resultWrap, { paddingTop: insets.top }]}>
-        <Text style={styles.resultEmoji}>😄</Text>
-        <Text style={styles.resultTitle}>You’re already in this group</Text>
-        <Text style={styles.resultSub}>
-          That code belongs to {outcome.group_name} — and you’re already a member.
-        </Text>
-        <View style={styles.resultButtonWrap}>
-          <GradientButton
-            label="Open Group →"
-            onPress={() => router.dismissTo(`/group/${outcome.group_id}`)}
-            variant="invite"
-          />
-        </View>
+        <ActivityIndicator color={COLORS.invite} />
       </View>
     );
   }
