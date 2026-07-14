@@ -50,7 +50,7 @@ export default function ProfileScreen(): ReactElement {
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // One search box over the connections list (D059): typing live-filters by name (D034); a full Callout ID is looked up only on a deliberate tap (D061), surfacing the match with its "+" badge.
+  // One search box over the connections list (D059): typing live-filters by name (D034); a full Callout ID is looked up only on a deliberate tap (D061), surfacing the match as an addable row.
   const [search, setSearch] = useState('');
   const [foundUser, setFoundUser] = useState<FoundUserRow | null>(null);
   const [findNotice, setFindNotice] = useState<string | null>(null);
@@ -314,10 +314,7 @@ export default function ProfileScreen(): ReactElement {
               size={38}
             />
             <View style={styles.foundInfo}>
-              <Text style={styles.foundName}>
-                {foundUser.is_connection ? '' : '+ '}
-                {foundUser.display_name}
-              </Text>
+              <Text style={styles.foundName}>{foundUser.display_name}</Text>
               <Text style={styles.foundMeta}>ID {foundUser.short_id}</Text>
             </View>
             {foundUser.is_connection ? (

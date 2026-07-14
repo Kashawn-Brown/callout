@@ -229,7 +229,6 @@ export default function InvitePlayerScreen(): ReactElement {
               >
                 <Avatar initials={p.initials} color={p.color} size={20} />
                 <Text style={[styles.chipName, { color: p.color }]}>
-                  {p.isNew ? '+ ' : ''}
                   {p.displayName.split(/\s+/)[0]}
                 </Text>
                 <Text style={[styles.chipRemove, { color: p.color }]}>×</Text>
@@ -268,11 +267,8 @@ export default function InvitePlayerScreen(): ReactElement {
                 >
                   <Avatar initials={p.initials} color={p.color} size={38} ring={isSelected} />
                   <View style={styles.contactInfo}>
-                    <Text style={styles.contactName}>
-                      {p.isNew ? '+ ' : ''}
-                      {p.displayName}
-                    </Text>
-                    {p.isNew && <Text style={styles.contactMeta}>New invitee — not a connection yet</Text>}
+                    <Text style={styles.contactName}>{p.displayName}</Text>
+                    {p.isNew && <Text style={styles.contactMeta}>New connection</Text>}
                   </View>
                   {alreadyIn ? (
                     <Text style={styles.inGroupLabel}>In group</Text>
