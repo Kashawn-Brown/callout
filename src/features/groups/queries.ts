@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import { initialsOf, memberColor } from '@/lib/format';
+import { initialsOf, resolveAvatarColor } from '@/lib/format';
 import type {
   Group,
   JoinRequest,
@@ -96,7 +96,7 @@ function toMemberView(membership: Membership, profilesById: Map<string, Profile>
     avatarUrl: profile?.avatar_url ?? null,
     role: membership.role,
     status: membership.status,
-    color: memberColor(membership.user_id),
+    color: resolveAvatarColor(membership.user_id, profile?.avatar_color),
     initials: initialsOf(displayName),
   };
 }
@@ -107,7 +107,7 @@ async function fetchProfilesById(userIds: string[]): Promise<Map<string, Profile
   }
   const { data, error } = await supabase
     .from('profile')
-    .select('id, display_name, avatar_url')
+    .select('id, display_name, avatar_url, avatar_color')
     .in('id', userIds);
   assertNoError(error, 'load profiles');
   return new Map((data as Profile[]).map((p) => [p.id, p]));
@@ -313,7 +313,7 @@ export async function fetchGroupDetail(groupId: string): Promise<GroupDetail> {
       userId: r.user_id,
       displayName,
       avatarUrl: profile?.avatar_url ?? null,
-      color: memberColor(r.user_id),
+      color: resolveAvatarColor(r.user_id, profile?.avatar_color),
       initials: initialsOf(displayName),
       requestedAt: r.created_at,
     };

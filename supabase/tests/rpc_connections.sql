@@ -5,7 +5,7 @@ begin;
 create extension if not exists pgtap with schema extensions;
 set local search_path = public, extensions;
 
-select plan(63);
+select plan(67);
 
 -- ---------------------------------------------------------------------------
 -- Fixtures and impersonation plumbing (same pattern as rpc_core_loop.sql).
@@ -112,6 +112,18 @@ select pg_temp.impersonate('11111111-0000-0000-0000-000000000001');
 select throws_ok($$ insert into public.connection (user_a_id, user_b_id) values ('11111111-0000-0000-0000-000000000002', '11111111-0000-0000-0000-000000000005') $$, '42501', null, 'clients cannot insert connection rows directly (CLAUDE.md §2.2)');
 select throws_ok($$ insert into public.join_request (group_id, user_id) values (gen_random_uuid(), '11111111-0000-0000-0000-000000000001') $$, '42501', null, 'clients cannot insert join_request rows directly');
 select throws_ok($$ update public.profile set short_id = 'AAAAAAAA' where id = '11111111-0000-0000-0000-000000000001' $$, '42501', null, 'short_id is excluded from the self-update column grant (D032)');
+
+-- Avatar color: self-updatable like display_name, but only palette values pass the check constraint.
+select lives_ok($$ update public.profile set avatar_color = '#FFD166' where id = '11111111-0000-0000-0000-000000000001' $$, 'a user can pick their avatar color');
+select throws_ok($$ update public.profile set avatar_color = '#123456' where id = '11111111-0000-0000-0000-000000000001' $$, '23514', null, 'colors outside the palette are rejected by the check constraint');
+
+reset role;
+select is((select p.avatar_color from public.profile p where p.id = '11111111-0000-0000-0000-000000000001'), '#FFD166', 'the picked color persisted');
+
+select pg_temp.impersonate('11111111-0000-0000-0000-000000000002');
+select is((select s.avatar_color from public.find_user_by_short_id((select p.short_id from public.profile p where p.id = '11111111-0000-0000-0000-000000000001')) s), '#FFD166', 'exact-ID lookup carries the picked color');
+
+select pg_temp.impersonate('11111111-0000-0000-0000-000000000001');
 
 set local role anon;
 select throws_ok($$ select public.add_connection('11111111-0000-0000-0000-000000000002') $$, '42501', null, 'anon cannot execute the connection RPCs');

@@ -12,12 +12,13 @@ export type FindUserByShortIdParams = {
   short_id_code: string;
 };
 
-/** The exact-ID lookup result (D056/D060/D061): zero or one row, the only global search key. is_connection tells pickers whether to show the "+" new-invitee badge. */
+/** The exact-ID lookup result (D056/D060/D061): zero or one row, the only global search key. is_connection tells pickers whether to mark the match as a new invitee. */
 export type FoundUserRow = {
   user_id: string;
   display_name: string;
   avatar_url: string | null;
   short_id: string;
+  avatar_color: string | null;
   is_connection: boolean;
 };
 

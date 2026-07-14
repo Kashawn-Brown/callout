@@ -1,4 +1,4 @@
-import { initialsOf, memberColor } from '@/lib/format';
+import { initialsOf, resolveAvatarColor } from '@/lib/format';
 import { supabase } from '@/lib/supabase';
 import type { Connection, Profile } from '@/types/models';
 
@@ -37,7 +37,7 @@ export async function fetchConnections(userId: string): Promise<ConnectionView[]
 
   const { data: profileData, error: profileError } = await supabase
     .from('profile')
-    .select('id, display_name, avatar_url, short_id')
+    .select('id, display_name, avatar_url, short_id, avatar_color')
     .in('id', otherIds);
   assertNoError(profileError, 'load connection profiles');
   const profilesById = new Map((profileData as Profile[]).map((p) => [p.id, p]));
@@ -53,7 +53,7 @@ export async function fetchConnections(userId: string): Promise<ConnectionView[]
       userId: otherId,
       displayName: profile.display_name,
       avatarUrl: profile.avatar_url,
-      color: memberColor(otherId),
+      color: resolveAvatarColor(otherId, profile.avatar_color),
       initials: initialsOf(profile.display_name),
       connectedAt: c.created_at,
     });

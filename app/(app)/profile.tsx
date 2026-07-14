@@ -24,12 +24,13 @@ import {
   verifyPhoneChange,
 } from '@/features/auth/api';
 import { useSession } from '@/features/auth/SessionProvider';
-import { updateDisplayName, useProfile } from '@/features/auth/useProfile';
+import { AvatarColorPicker } from '@/features/auth/AvatarColorPicker';
+import { updateAvatarColor, updateDisplayName, useProfile } from '@/features/auth/useProfile';
 import { addConnection, findUserByShortId, removeConnection } from '@/features/connections/api';
 import { useConnections } from '@/features/connections/useConnections';
 import type { ConnectionView } from '@/features/connections/queries';
 import { APP_DOWNLOAD_URL } from '@/lib/app-links';
-import { initialsOf, memberColor } from '@/lib/format';
+import { initialsOf, resolveAvatarColor } from '@/lib/format';
 import type { FoundUserRow } from '@/types/api';
 import { COLORS, FONTS, RADII, SECTION_LABEL, SPACING } from '@/lib/theme';
 
@@ -48,6 +49,8 @@ export default function ProfileScreen(): ReactElement {
   const [nameDraft, setNameDraft] = useState<string | null>(null);
   const [nameSaving, setNameSaving] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [colorPickerOpen, setColorPickerOpen] = useState(false);
+  const [colorSaving, setColorSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // One search box over the connections list (D059): typing live-filters by name (D034); a full Callout ID is looked up only on a deliberate tap (D061), surfacing the match as an addable row.
@@ -86,6 +89,26 @@ export default function ProfileScreen(): ReactElement {
     await Clipboard.setStringAsync(profile.short_id);
     setCopied(true);
   }, [profile]);
+
+  // Persists the picked accent; every surface (rosters, chips, how others see you) resolves it via resolveAvatarColor on their next load.
+  const handleSaveColor = useCallback(
+    async (color: string) => {
+      if (!userId) {
+        return;
+      }
+      setColorSaving(true);
+      setError(null);
+      const result = await updateAvatarColor(userId, color);
+      setColorSaving(false);
+      if (result.error) {
+        setError(result.error.message);
+        return;
+      }
+      setColorPickerOpen(false);
+      refetchProfile();
+    },
+    [userId, refetchProfile],
+  );
 
   useEffect(() => {
     if (!copied) {
@@ -219,11 +242,21 @@ export default function ProfileScreen(): ReactElement {
       {/* Identity */}
       <View style={styles.section}>
         <View style={styles.identityCard}>
-          <Avatar
-            initials={profile ? initialsOf(profile.display_name) : '?'}
-            color={userId ? memberColor(userId) : COLORS.invite}
-            size={64}
-          />
+          {/* The pencil badge signals editability; the whole avatar is the tap target opening the color picker. */}
+          <Pressable
+            onPress={() => setColorPickerOpen(true)}
+            accessibilityLabel="Change avatar color"
+            style={({ pressed }) => pressed && styles.pressed}
+          >
+            <Avatar
+              initials={profile ? initialsOf(profile.display_name) : '?'}
+              color={
+                userId ? resolveAvatarColor(userId, profile?.avatar_color) : COLORS.invite
+              }
+              size={64}
+              editBadge
+            />
+          </Pressable>
           <View style={styles.nameRow}>
             <TextInput
               value={displayName}
@@ -268,6 +301,15 @@ export default function ProfileScreen(): ReactElement {
         </View>
       </View>
 
+      <AvatarColorPicker
+        visible={colorPickerOpen}
+        initials={profile ? initialsOf(profile.display_name) : '?'}
+        currentColor={userId ? resolveAvatarColor(userId, profile?.avatar_color) : COLORS.invite}
+        saving={colorSaving}
+        onSave={handleSaveColor}
+        onCancel={() => setColorPickerOpen(false)}
+      />
+
       {/* Sign-in methods (D041) */}
       <View style={styles.section}>
         <Text style={styles.sectionLabel}>Sign-in Methods</Text>
@@ -310,7 +352,7 @@ export default function ProfileScreen(): ReactElement {
           <View style={styles.foundRow}>
             <Avatar
               initials={initialsOf(foundUser.display_name)}
-              color={memberColor(foundUser.user_id)}
+              color={resolveAvatarColor(foundUser.user_id, foundUser.avatar_color)}
               size={38}
             />
             <View style={styles.foundInfo}>

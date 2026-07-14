@@ -33,7 +33,7 @@ export function useProfile(): UseProfileResult {
 
     supabase
       .from('profile')
-      .select('id, display_name, avatar_url, short_id')
+      .select('id, display_name, avatar_url, short_id, avatar_color')
       .eq('id', userId)
       .single()
       .then(({ data, error }) => {
@@ -78,6 +78,22 @@ export async function updateDisplayName(
   const { error } = await supabase
     .from('profile')
     .update({ display_name: displayName.trim() })
+    .eq('id', userId);
+
+  if (error) {
+    return { error: { code: error.code, message: error.message } };
+  }
+  return { error: null };
+}
+
+/** Saves the picked avatar accent through the same self-update surface; the server's check constraint holds the palette line regardless of what the client sends. */
+export async function updateAvatarColor(
+  userId: string,
+  avatarColor: string,
+): Promise<{ error: { code: string; message: string } | null }> {
+  const { error } = await supabase
+    .from('profile')
+    .update({ avatar_color: avatarColor })
     .eq('id', userId);
 
   if (error) {

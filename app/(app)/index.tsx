@@ -15,7 +15,7 @@ import { takePendingJoinCode } from '@/features/connections/pending-invite';
 import type { GroupSummary, PendingInvite } from '@/features/groups/queries';
 import { useCountdown } from '@/features/groups/useCountdown';
 import { useHomeData } from '@/features/groups/useHomeData';
-import { initialsOf, memberColor, parseIntervalToMinutes } from '@/lib/format';
+import { initialsOf, parseIntervalToMinutes, resolveAvatarColor } from '@/lib/format';
 import { COLORS, FONTS, GRADIENTS, RADII, SECTION_LABEL, SPACING } from '@/lib/theme';
 
 export default function HomeScreen(): ReactElement {
@@ -70,7 +70,7 @@ export default function HomeScreen(): ReactElement {
           <Pressable onPress={handleAvatarPress} accessibilityLabel="Profile and settings">
             <Avatar
               initials={profile ? initialsOf(profile.display_name) : '?'}
-              color={userId ? memberColor(userId) : COLORS.invite}
+              color={userId ? resolveAvatarColor(userId, profile?.avatar_color) : COLORS.invite}
               size={36}
             />
           </Pressable>

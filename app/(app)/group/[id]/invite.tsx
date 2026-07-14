@@ -22,7 +22,7 @@ import { findUserByShortId } from '@/features/connections/api';
 import { useConnections } from '@/features/connections/useConnections';
 import { invitePlayer } from '@/features/groups/api';
 import { useGroupDetail } from '@/features/groups/useGroupDetail';
-import { initialsOf, memberColor } from '@/lib/format';
+import { initialsOf, resolveAvatarColor } from '@/lib/format';
 import { COLORS, FONTS, RADII, SECTION_LABEL, SPACING } from '@/lib/theme';
 
 /** One selectable person in the picker: an existing connection, or someone found by exact ID — the latter marked as a new invitee with the "+" badge (D061). */
@@ -90,7 +90,7 @@ export default function InvitePlayerScreen(): ReactElement {
     const person: PickerPerson = {
       userId: match.user_id,
       displayName: match.display_name,
-      color: memberColor(match.user_id),
+      color: resolveAvatarColor(match.user_id, match.avatar_color),
       initials: initialsOf(match.display_name),
       // An existing connection found by ID is just a connection; only a stranger gets the "+" (D061).
       isNew: !match.is_connection,

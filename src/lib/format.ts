@@ -6,8 +6,11 @@ const MS_PER_MINUTE = 60_000;
 const MS_PER_HOUR = 3_600_000;
 const MS_PER_DAY = 86_400_000;
 
-/** Member accent palette from the prototype's mock roster, assigned deterministically by user id so a member keeps their color across screens and sessions. */
+/** Member accent palette from the prototype's mock roster, assigned deterministically by user id so a member keeps their color across screens and sessions. Never extend this array: its length feeds the hash below, so adding entries would silently reshuffle every existing user's default color. */
 const MEMBER_COLORS = ['#7B61FF', '#00D4AA', '#FF9A2E', '#FF4E3A', '#FF6B9D', '#4ECAFF'] as const;
+
+/** The pickable avatar palette (profile color picker): the six hash colors plus gold and lime. Must stay in sync with the profile.avatar_color check constraint. */
+export const AVATAR_COLORS = [...MEMBER_COLORS, '#FFD166', '#A3E635'] as const;
 
 export function memberColor(userId: string): string {
   let hash = 0;
@@ -15,6 +18,11 @@ export function memberColor(userId: string): string {
     hash = (hash * 31 + userId.charCodeAt(i)) >>> 0;
   }
   return MEMBER_COLORS[hash % MEMBER_COLORS.length];
+}
+
+/** A user's avatar accent: their picked color when set, otherwise the deterministic hash default — so nothing changes for anyone until they choose. */
+export function resolveAvatarColor(userId: string, avatarColor: string | null | undefined): string {
+  return avatarColor ?? memberColor(userId);
 }
 
 export function initialsOf(displayName: string): string {

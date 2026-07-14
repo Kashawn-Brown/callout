@@ -15,6 +15,8 @@ export type Profile = {
   avatar_url: string | null;
   /** Shareable short user ID (D032): server-generated, never client-writable. */
   short_id: string;
+  /** User-picked avatar accent from the fixed palette; null falls back to the per-user hash color (resolveAvatarColor). */
+  avatar_color: string | null;
 };
 
 export type Connection = {
