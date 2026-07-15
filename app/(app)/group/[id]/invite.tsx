@@ -271,46 +271,53 @@ export default function InvitePlayerScreen(): ReactElement {
           </Text>
         ) : (
           <View style={styles.contactList}>
-            {listPeople.map((p, i) => {
-              const isSelected = selected.some((s) => s.userId === p.userId);
-              const alreadyIn = memberIds.has(p.userId);
-              return (
-                <Pressable
-                  key={p.userId}
-                  onPress={alreadyIn ? undefined : () => toggle(p)}
-                  disabled={alreadyIn}
-                  style={[
-                    styles.contactRow,
-                    i < listPeople.length - 1 && styles.contactRowDivider,
-                    isSelected && { backgroundColor: `${p.color}10` },
-                    alreadyIn && styles.contactRowDisabled,
-                  ]}
-                >
-                  <Avatar initials={p.initials} color={p.color} size={38} ring={isSelected} />
-                  <View style={styles.contactInfo}>
-                    <Text style={styles.contactName}>{p.displayName}</Text>
-                    {p.isNew && <Text style={styles.contactMeta}>New connection</Text>}
-                  </View>
-                  {alreadyIn ? (
-                    <Text style={styles.inGroupLabel}>In group</Text>
-                  ) : (
-                    isSelected && (
-                      <View style={[styles.checkCircle, { backgroundColor: p.color }]}>
-                        <Svg width={12} height={12} viewBox="0 0 12 12" fill="none">
-                          <Path
-                            d="M2 6l3 3 5-5"
-                            stroke={COLORS.white}
-                            strokeWidth={1.8}
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </Svg>
-                      </View>
-                    )
-                  )}
-                </Pressable>
-              );
-            })}
+            {/* Capped-height scroll so a long connections list scrolls within the card instead of growing the screen. nestedScrollEnabled lets it scroll independently of the outer page ScrollView on Android. */}
+            <ScrollView
+              style={styles.contactScroll}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="handled"
+            >
+              {listPeople.map((p, i) => {
+                const isSelected = selected.some((s) => s.userId === p.userId);
+                const alreadyIn = memberIds.has(p.userId);
+                return (
+                  <Pressable
+                    key={p.userId}
+                    onPress={alreadyIn ? undefined : () => toggle(p)}
+                    disabled={alreadyIn}
+                    style={[
+                      styles.contactRow,
+                      i < listPeople.length - 1 && styles.contactRowDivider,
+                      isSelected && { backgroundColor: `${p.color}10` },
+                      alreadyIn && styles.contactRowDisabled,
+                    ]}
+                  >
+                    <Avatar initials={p.initials} color={p.color} size={38} ring={isSelected} />
+                    <View style={styles.contactInfo}>
+                      <Text style={styles.contactName}>{p.displayName}</Text>
+                      {p.isNew && <Text style={styles.contactMeta}>New connection</Text>}
+                    </View>
+                    {alreadyIn ? (
+                      <Text style={styles.inGroupLabel}>In group</Text>
+                    ) : (
+                      isSelected && (
+                        <View style={[styles.checkCircle, { backgroundColor: p.color }]}>
+                          <Svg width={12} height={12} viewBox="0 0 12 12" fill="none">
+                            <Path
+                              d="M2 6l3 3 5-5"
+                              stroke={COLORS.white}
+                              strokeWidth={1.8}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </Svg>
+                        </View>
+                      )
+                    )}
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
           </View>
         )}
 
@@ -414,6 +421,10 @@ const styles = StyleSheet.create({
     borderRadius: RADII.input,
     borderWidth: 1,
     overflow: 'hidden',
+  },
+  // ~5 rows visible before the list scrolls within its capped height rather than growing the page.
+  contactScroll: {
+    maxHeight: 300,
   },
   contactMeta: {
     color: COLORS.invite,

@@ -384,25 +384,32 @@ export default function ProfileScreen(): ReactElement {
           </Text>
         ) : (
           <View style={styles.connectionList}>
-            {visibleConnections.map((c, i) => (
-              <View
-                key={c.userId}
-                style={[
-                  styles.connectionRow,
-                  i < visibleConnections.length - 1 && styles.connectionRowDivider,
-                ]}
-              >
-                <Avatar initials={c.initials} color={c.color} size={38} />
-                <Text style={styles.connectionName}>{c.displayName}</Text>
-                <Pressable
-                  onPress={() => handleRemoveConnection(c)}
-                  accessibilityLabel={`Remove ${c.displayName}`}
-                  style={({ pressed }) => [styles.removeButton, pressed && styles.pressed]}
+            {/* Capped-height scroll so a long connections list never grows the screen unbounded — it scrolls within the card instead. nestedScrollEnabled lets it scroll independently of the outer page ScrollView on Android. */}
+            <ScrollView
+              style={styles.connectionScroll}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="handled"
+            >
+              {visibleConnections.map((c, i) => (
+                <View
+                  key={c.userId}
+                  style={[
+                    styles.connectionRow,
+                    i < visibleConnections.length - 1 && styles.connectionRowDivider,
+                  ]}
                 >
-                  <Text style={styles.removeButtonLabel}>×</Text>
-                </Pressable>
-              </View>
-            ))}
+                  <Avatar initials={c.initials} color={c.color} size={38} />
+                  <Text style={styles.connectionName}>{c.displayName}</Text>
+                  <Pressable
+                    onPress={() => handleRemoveConnection(c)}
+                    accessibilityLabel={`Remove ${c.displayName}`}
+                    style={({ pressed }) => [styles.removeButton, pressed && styles.pressed]}
+                  >
+                    <Text style={styles.removeButtonLabel}>×</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </ScrollView>
             {visibleConnections.length === 0 && (
               <Text style={styles.emptyFilterText}>No connections match “{search.trim()}”.</Text>
             )}
@@ -640,6 +647,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginTop: 12,
     overflow: 'hidden',
+  },
+  // ~5 rows visible before the list scrolls within its capped height rather than growing the page.
+  connectionScroll: {
+    maxHeight: 300,
   },
   connectionName: {
     color: COLORS.textPrimary,
