@@ -13,6 +13,7 @@ export async function signUpWithEmail(
   email: string,
   password: string,
   displayName: string,
+  redirectTo: string,
 ): Promise<AuthResult> {
   const { data, error } = await supabase.auth.signUp({
     email: email.trim(),
@@ -20,6 +21,8 @@ export async function signUpWithEmail(
     options: {
       // Consumed by private.handle_new_user (migration 20260712170000) to seed public.profile.display_name (D023).
       data: { display_name: displayName.trim() },
+      // Where the confirmation email's link lands after GoTrue verifies it (D070) — the app root, which sets the session from the redirect and signs the user straight in.
+      emailRedirectTo: redirectTo,
     },
   });
 
@@ -42,6 +45,46 @@ export async function signInWithEmail(email: string, password: string): Promise<
 
 export async function signOut(): Promise<AuthResult> {
   const { error } = await supabase.auth.signOut();
+
+  if (error) {
+    return { error: { code: error.code ?? FALLBACK_CODE, message: error.message } };
+  }
+
+  return { error: null };
+}
+
+/** Sends the password-recovery email (D068). redirectTo is the app deep link GoTrue bounces back to after verifying the link server-side; the root layout turns that redirect into a recovery session and routes to the reset screen. */
+export async function requestPasswordReset(email: string, redirectTo: string): Promise<AuthResult> {
+  const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo });
+
+  if (error) {
+    return { error: { code: error.code ?? FALLBACK_CODE, message: error.message } };
+  }
+
+  return { error: null };
+}
+
+/** Sets a new password on the current session — used by the reset screen once the recovery link has established one. Server enforces the D069 policy; the screen mirrors it so this call rarely fails. */
+export async function updatePassword(password: string): Promise<AuthResult> {
+  const { error } = await supabase.auth.updateUser({ password });
+
+  if (error) {
+    return { error: { code: error.code ?? FALLBACK_CODE, message: error.message } };
+  }
+
+  return { error: null };
+}
+
+/** Resends the sign-up confirmation email (D070) — for the "check your email" screen and the email-not-confirmed sign-in error. */
+export async function resendSignUpConfirmation(
+  email: string,
+  redirectTo: string,
+): Promise<AuthResult> {
+  const { error } = await supabase.auth.resend({
+    type: 'signup',
+    email: email.trim(),
+    options: { emailRedirectTo: redirectTo },
+  });
 
   if (error) {
     return { error: { code: error.code ?? FALLBACK_CODE, message: error.message } };
