@@ -218,7 +218,7 @@ export default function InvitePlayerScreen(): ReactElement {
                 setSearch(text);
                 setFindNotice(null);
               }}
-              placeholder="Filter connections, or enter a Callout ID"
+              placeholder="Filter or add by Callout ID"
               placeholderTextColor={COLORS.textMuted}
               autoCapitalize="none"
               autoCorrect={false}
