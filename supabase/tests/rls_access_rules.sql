@@ -51,7 +51,8 @@ insert into public.notification (group_id, turn_id, recipient_user_id, sent_by, 
 -- ---------------------------------------------------------------------------
 -- Signup trigger (as postgres): profiles were auto-created with the right display names.
 -- ---------------------------------------------------------------------------
-select is((select count(*)::int from public.profile), 6, 'signup trigger created a profile for every auth user');
+-- Scoped to the fixture ids (Phase 4 hardening fix): `supabase test db` runs against the live local database, so a global count breaks the moment real dev accounts exist alongside the fixtures.
+select is((select count(*)::int from public.profile p where p.id in ('00000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000005', '00000000-0000-0000-0000-000000000006')), 6, 'signup trigger created a profile for every auth user');
 select is((select display_name from public.profile where id = '00000000-0000-0000-0000-000000000001'), 'The Host', 'display_name comes from raw_user_meta_data when present');
 select is((select display_name from public.profile where id = '00000000-0000-0000-0000-000000000002'), 'member', 'display_name falls back to the email prefix');
 

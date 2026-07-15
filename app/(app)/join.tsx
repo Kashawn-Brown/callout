@@ -109,7 +109,7 @@ export default function JoinScreen(): ReactElement {
   const stats = [
     { label: 'Members', value: String(invite.members.length) },
     { label: 'Deadline', value: windowMinutes !== null ? deadlineLabel(windowMinutes) : '—' },
-    { label: 'Status', value: invite.group.status === 'setup' ? 'Starting' : 'Playing' },
+    { label: 'Status', value: invite.group.status === 'setup' ? 'Waiting' : 'Active' },
   ];
 
   return (

@@ -1,3 +1,4 @@
+import * as Linking from 'expo-linking';
 import { Link } from 'expo-router';
 import { useCallback, useState, type ReactElement } from 'react';
 import {
@@ -15,14 +16,15 @@ import { ErrorBanner } from '@/components/ErrorBanner';
 import { FormField } from '@/components/FormField';
 import { GradientButton } from '@/components/GradientButton';
 import { SegmentedToggle } from '@/components/SegmentedToggle';
-import { signUpWithEmail, signUpWithPhone } from '@/features/auth/api';
+import { resendSignUpConfirmation, signUpWithEmail, signUpWithPhone } from '@/features/auth/api';
+import { PASSWORD_MIN_LENGTH, isPasswordValid } from '@/features/auth/password-policy';
+import { PasswordRequirements } from '@/features/auth/PasswordRequirements';
 import { PhoneOtpForm } from '@/features/auth/PhoneOtpForm';
 import { normalizeJoinCode, stashPendingJoinCode } from '@/features/connections/pending-invite';
 import { COLORS, FONTS, SPACING } from '@/lib/theme';
 
 // Mirrors the profile.display_name check constraint (1–50 chars) so validation fails in the form, not in the database trigger.
 const DISPLAY_NAME_MAX_LENGTH = 50;
-const PASSWORD_MIN_LENGTH = 6;
 
 type AuthMethod = 'email' | 'phone';
 
@@ -37,12 +39,13 @@ export default function SignUpScreen(): ReactElement {
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [confirmationSent, setConfirmationSent] = useState(false);
+  const [resendState, setResendState] = useState<'idle' | 'sending' | 'sent'>('idle');
 
   const canSubmit =
     displayName.trim().length > 0 &&
     displayName.trim().length <= DISPLAY_NAME_MAX_LENGTH &&
     email.trim().length > 0 &&
-    password.length >= PASSWORD_MIN_LENGTH &&
+    isPasswordValid(password) &&
     !submitting;
 
   const displayNameMissing =
@@ -70,19 +73,31 @@ export default function SignUpScreen(): ReactElement {
       setSubmitting(false);
       return;
     }
-    const result = await signUpWithEmail(email, password, displayName);
+    // The confirmation link (D070) bounces back to the app root for this exact environment (Expo Go dev URL or callout://); the root layout sets the session from the redirect and signs them straight in.
+    const result = await signUpWithEmail(email, password, displayName, Linking.createURL(''));
     if (result.error) {
       setError(result.error.message);
       setSubmitting(false);
       return;
     }
     if (result.needsEmailConfirmation) {
-      // Local dev has confirmations off, but a hosted project may require them — without this branch the screen would just sit there after a successful sign-up.
+      // Confirmations are on in every environment (D070); a session only exists straight away if a project has them disabled.
       setConfirmationSent(true);
       setSubmitting(false);
     }
     // Otherwise a session now exists and the root layout's guard swaps to the (app) group.
   }, [displayName, email, password, stashInviteIfPresent]);
+
+  const handleResend = useCallback(async () => {
+    setResendState('sending');
+    const result = await resendSignUpConfirmation(email, Linking.createURL(''));
+    if (result.error) {
+      setError(result.error.message);
+      setResendState('idle');
+      return;
+    }
+    setResendState('sent');
+  }, [email]);
 
   const handlePhoneSend = useCallback(
     async (phone: string) => {
@@ -100,9 +115,20 @@ export default function SignUpScreen(): ReactElement {
         <Text style={styles.confirmEmoji}>📬</Text>
         <Text style={styles.confirmTitle}>Check your email</Text>
         <Text style={styles.confirmBody}>
-          We sent a confirmation link to {email.trim()}. Confirm it, then come back and sign in.
+          We sent a confirmation link to {email.trim()}. Open it on this device and you’ll be
+          signed in automatically.
         </Text>
-        <Link href="/sign-in" style={styles.switchLink}>
+        {error !== null && <ErrorBanner message={error} />}
+        <Pressable onPress={handleResend} disabled={resendState !== 'idle'}>
+          <Text style={[styles.switchLink, resendState !== 'idle' && styles.resendDone]}>
+            {resendState === 'sent'
+              ? 'Sent — check your inbox'
+              : resendState === 'sending'
+                ? 'Sending…'
+                : 'Resend email'}
+          </Text>
+        </Pressable>
+        <Link href="/sign-in" style={[styles.switchLink, styles.backLink]}>
           Back to sign in
         </Link>
       </View>
@@ -158,15 +184,19 @@ export default function SignUpScreen(): ReactElement {
                 keyboardType="email-address"
                 textContentType="emailAddress"
               />
-              <FormField
-                label="Password"
-                value={password}
-                onChangeText={setPassword}
-                placeholder={`At least ${PASSWORD_MIN_LENGTH} characters`}
-                secureTextEntry
-                autoComplete="new-password"
-                textContentType="newPassword"
-              />
+              <View>
+                <FormField
+                  label="Password"
+                  value={password}
+                  onChangeText={setPassword}
+                  placeholder={`At least ${PASSWORD_MIN_LENGTH} characters`}
+                  secureTextEntry
+                  autoComplete="new-password"
+                  textContentType="newPassword"
+                />
+                {/* D069: mirror the server's password policy inline so weak passwords fail while typing, not on the round-trip. */}
+                {password.length > 0 && <PasswordRequirements password={password} />}
+              </View>
             </>
           ) : null}
 
@@ -216,6 +246,9 @@ export default function SignUpScreen(): ReactElement {
 }
 
 const styles = StyleSheet.create({
+  backLink: {
+    marginTop: 16,
+  },
   brand: {
     color: COLORS.textPrimary,
     fontFamily: FONTS.displayBlack,
@@ -262,6 +295,9 @@ const styles = StyleSheet.create({
     color: COLORS.invite,
     fontFamily: FONTS.bodySemiBold,
     fontSize: 13,
+  },
+  resendDone: {
+    opacity: 0.6,
   },
   switchLink: {
     color: COLORS.invite,
